@@ -1,0 +1,52 @@
+"""Right-Swipe / Left-Swipe lifecycle: model update + denormalized DB write + session mark."""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import sqlite3
+
+import db.database as db
+from swipe.session import SessionStore
+from swipe.snapshot import Snapshot
+
+logger = logging.getLogger(__name__)
+
+
+class SwipeError(ValueError):
+    pass
+
+
+async def record_swipe(
+    conn: sqlite3.Connection,
+    model_service,
+    sessions: SessionStore,
+    user: dict,
+    item: dict,
+    snapshot: Snapshot,
+    direction: str,
+    session_id: str,
+) -> int:
+    """Full Right-Swipe / Left-Swipe contract. Returns total_swipes after update."""
+    if direction not in ("right", "left"):
+        raise SwipeError("direction must be 'right' or 'left'")
+    if snapshot.user_id != user["id"]:
+        raise SwipeError("snapshot user mismatch")
+
+    reward = 1 if direction == "right" else 0
+    total = await asyncio.to_thread(
+        model_service.record_swipe, user["id"], item, snapshot.to_context(), reward
+    )
+    db.record_swipe(
+        conn,
+        user["id"],
+        item["id"],
+        direction,
+        snapshot.dietary_mode,
+        snapshot.hour,
+        snapshot.mood,
+        snapshot.recent_rejection_rate,
+        snapshot.days_since_last_session,
+    )
+    await sessions.mark(session_id, item["id"])
+    return total
