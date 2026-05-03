@@ -402,3 +402,64 @@ async def test_nearby_unknown_item(auth_client):
     client, _, _ = auth_client
     resp = await client.get("/api/nearby?food_item_id=99999&lat=37.77&lng=-122.41")
     assert resp.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Admin batch
+# ---------------------------------------------------------------------------
+
+ADMIN_TOKEN = "test-admin-secret"
+
+
+@pytest_asyncio.fixture
+async def admin_client(client):
+    client.headers["Authorization"] = f"Bearer {ADMIN_TOKEN}"
+    yield client
+
+
+async def test_admin_batch_forbidden_no_token(client):
+    resp = await client.post("/api/admin/batch", json={})
+    assert resp.status_code in (401, 403)
+
+
+async def test_admin_batch_forbidden_wrong_token(client):
+    resp = await client.post(
+        "/api/admin/batch", json={},
+        headers={"Authorization": "Bearer wrongtoken"},
+    )
+    assert resp.status_code == 403
+
+
+async def test_admin_batch_inserts_restaurant_and_items(admin_client, monkeypatch):
+    monkeypatch.setenv("CRAVINGS_ADMIN_TOKEN", ADMIN_TOKEN)
+    # Patch tag_food_item to avoid Ollama in tests
+    import main as _main
+    monkeypatch.setattr(_main, "tag_food_item", lambda name, desc: {
+        "spice_level": 0.5, "sweetness": 0.3, "sourness": 0.1,
+        "savory_umami": 0.7, "saltiness": 0.4, "bitterness": 0.1,
+        "temperature": 0.6, "texture_softness": 0.5, "sauce_heaviness": 0.4,
+        "richness": 0.6, "protein_type": "chicken", "cuisine_type": "american",
+        "carb_base": "none", "veggie_density": 0.2, "dairy_content": 0.1,
+        "smell_intensity": 0.3, "nausea_trigger": 0.0,
+        "safety_risk_bitmask": 0, "dietary_flags_bitmask": 0,
+    })
+
+    body = {
+        "restaurants": [{"name": "Test Place", "location": "123 St", "cuisine_type": "american", "source_type": "manual"}],
+        "food_items": [{"name": "Burger", "description": "A burger", "restaurant_name": "Test Place"}],
+    }
+    resp = await admin_client.post("/api/admin/batch", json=body)
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["restaurants_inserted"] == 1
+    assert data["food_items_inserted"] == 1
+    assert data["tagging"] == "queued"
+
+
+async def test_admin_batch_empty_body(admin_client, monkeypatch):
+    monkeypatch.setenv("CRAVINGS_ADMIN_TOKEN", ADMIN_TOKEN)
+    resp = await admin_client.post("/api/admin/batch", json={})
+    assert resp.status_code == 202
+    data = resp.json()
+    assert data["restaurants_inserted"] == 0
+    assert data["food_items_inserted"] == 0

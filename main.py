@@ -6,14 +6,18 @@ import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+load_dotenv()
 
 import db.database as db
 import swipe
 from model_server.model_service import ModelService
 from places import PlacesAdapter, PlacesError
 from tagging import safety
+from tagging.client import tag_food_item
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +37,7 @@ async def lifespan(app: FastAPI):
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
     db.init_db(_db_path)
     _model_service = ModelService(_db_path)
-    _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_MAPS_API_KEY", ""))
+    _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""))
     _sessions = swipe.SessionStore()
     yield
 
@@ -221,6 +225,74 @@ async def nearby(
 
 
 # ---------------------------------------------------------------------------
+# Admin routes
+# ---------------------------------------------------------------------------
+
+async def _tag_items_background(item_ids: list[int]) -> None:
+    conn = db.get_connection(_db_path)
+    try:
+        for item_id in item_ids:
+            row = conn.execute(
+                "SELECT name, description FROM food_items WHERE id = ?", [item_id]
+            ).fetchone()
+            if row is None:
+                continue
+            try:
+                tags = await asyncio.to_thread(tag_food_item, row["name"], row["description"])
+                db.update_food_item_tags(conn, item_id, tags)
+            except Exception as e:
+                logger.warning("tagging failed for item %d: %s", item_id, e)
+                conn.execute(
+                    "UPDATE food_items SET tagging_status = 'failed' WHERE id = ?", [item_id]
+                )
+                conn.commit()
+    finally:
+        conn.close()
+
+
+def _require_admin(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
+    admin_token = os.environ.get("CRAVINGS_ADMIN_TOKEN", "")
+    if not admin_token or credentials.credentials != admin_token:
+        raise HTTPException(status_code=403, detail="forbidden")
+
+
+@app.post("/api/admin/batch", status_code=202, dependencies=[Depends(_require_admin)])
+async def admin_batch(body: dict):
+    """Insert restaurants + food items and queue async LLM tagging.
+
+    Body: {"restaurants": [{name, location, cuisine_type, source_type}, ...],
+           "food_items":   [{name, description, restaurant_id?}, ...]}
+    """
+    restaurants = body.get("restaurants") or []
+    food_items = body.get("food_items") or []
+
+    conn = db.get_connection(_db_path)
+    try:
+        restaurant_ids: dict[str, int] = {}
+        for r in restaurants:
+            rid = db.insert_restaurant(conn, r)
+            if r.get("name"):
+                restaurant_ids[r["name"]] = rid
+
+        item_ids: list[int] = []
+        for item in food_items:
+            if "restaurant_name" in item and item["restaurant_name"] in restaurant_ids:
+                item = {**item, "restaurant_id": restaurant_ids[item["restaurant_name"]]}
+            fid = db.insert_food_item(conn, item)
+            item_ids.append(fid)
+    finally:
+        conn.close()
+
+    asyncio.create_task(_tag_items_background(item_ids))
+
+    return {
+        "restaurants_inserted": len(restaurants),
+        "food_items_inserted": len(item_ids),
+        "tagging": "queued",
+    }
+
+
+# ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 
@@ -236,6 +308,6 @@ if __name__ == "__main__":
 
     os.environ["CRAVINGS_DB"] = args.db
     if args.maps_api_key:
-        os.environ["GOOGLE_MAPS_API_KEY"] = args.maps_api_key
+        os.environ["GOOGLE_PLACES_API_KEY"] = args.maps_api_key
 
     uvicorn.run("main:app", host="0.0.0.0", port=args.port, reload=False)

@@ -8,11 +8,6 @@ wheels/
 
 # Virtual environments
 .venv
-
-CONTEXT.md
-CLAUDE.md
-PROJECT.md
-
 *.db
 
 .claude/
@@ -20,3 +15,5 @@ PROJECT.md
 .pytest_cache/
 
 docs/
+
+.env
