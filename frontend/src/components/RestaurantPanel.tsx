@@ -1,10 +1,16 @@
-const CUISINE_EMOJI = {
+import type { FoodItem, Restaurant } from '../api'
+
+const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
   american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
   chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
 }
 
-function StarRating({ rating }) {
+interface StarRatingProps {
+  rating: number
+}
+
+function StarRating({ rating }: StarRatingProps) {
   if (!rating || rating <= 0) return null
   const full = Math.floor(rating)
   const half = rating % 1 >= 0.5
@@ -24,9 +30,13 @@ function StarRating({ rating }) {
   )
 }
 
-function RestaurantCard({ restaurant }) {
-  const mapsHref = restaurant.maps_url ||
-    `https://maps.google.com/?q=${encodeURIComponent((restaurant.name || '') + ' ' + (restaurant.address || ''))}`
+interface RestaurantCardProps {
+  restaurant: Restaurant
+}
+
+function RestaurantCard({ restaurant }: RestaurantCardProps) {
+  const mapsHref = restaurant.maps_url ??
+    `https://maps.google.com/?q=${encodeURIComponent((restaurant.name ?? '') + ' ' + (restaurant.address ?? ''))}`
 
   return (
     <div
@@ -81,11 +91,15 @@ function RestaurantCard({ restaurant }) {
   )
 }
 
-export function RestaurantPanel({ food, restaurants, onDismiss }) {
-  // restaurants === null → loading; [] → none found; array → results
-  const isLoading = restaurants === null
-  const cuisine = food?.cuisine_type?.toLowerCase() || ''
-  const emoji = CUISINE_EMOJI[cuisine] || '🍽️'
+interface RestaurantPanelProps {
+  food: FoodItem | null
+  restaurants: Restaurant[] | null
+  onDismiss: () => void
+}
+
+export function RestaurantPanel({ food, restaurants, onDismiss }: RestaurantPanelProps) {
+  const cuisine = food?.cuisine_type?.toLowerCase() ?? ''
+  const emoji = CUISINE_EMOJI[cuisine] ?? '🍽️'
 
   return (
     <div style={{
@@ -94,7 +108,6 @@ export function RestaurantPanel({ food, restaurants, onDismiss }) {
       padding: '32px 28px 24px', display: 'flex', flexDirection: 'column', gap: 20,
     }}>
 
-      {/* Header */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 16, paddingBottom: 4 }}>
         <div style={{ fontSize: 48, lineHeight: 1, flexShrink: 0 }}>{emoji}</div>
         <div>
@@ -109,8 +122,7 @@ export function RestaurantPanel({ food, restaurants, onDismiss }) {
         </div>
       </div>
 
-      {/* Content */}
-      {isLoading ? (
+      {restaurants === null ? (
         <div style={{
           display: 'flex', flexDirection: 'column', alignItems: 'center',
           justifyContent: 'center', gap: 14, padding: '32px 0',
@@ -140,7 +152,6 @@ export function RestaurantPanel({ food, restaurants, onDismiss }) {
         </div>
       )}
 
-      {/* Next button */}
       <button
         style={{
           width: '100%', padding: '16px', border: 'none', borderRadius: 100,

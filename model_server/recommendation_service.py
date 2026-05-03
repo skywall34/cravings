@@ -38,7 +38,7 @@ class RecommendationService:
             })
         return results
 
-    def record_swipe(self, user_id: int, item: dict, context: dict, reward: int) -> int:
+    def record_swipe(self, user_id: int, item: dict, context: dict, reward: float) -> int:
         """Update model with swipe signal. Returns total_swipes after update."""
         model = self.store.get(user_id)
         model.record_swipe(item, context, reward)

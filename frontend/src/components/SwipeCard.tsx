@@ -1,20 +1,21 @@
 import { useState, useCallback, forwardRef, useImperativeHandle } from 'react'
+import type { FoodItem, SwipeDirection } from '../api'
 
-const CUISINE_EMOJI = {
+const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
   american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
   chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
 }
 
-const CUISINE_BG = {
+const CUISINE_BG: Record<string, string> = {
   japanese: '#FFF1EC', mexican: '#FFF9EC', italian: '#FFF8EC',
   indian: '#FFF3EC', american: '#FFF8EC', thai: '#FFFAEC',
   korean: '#FFF2EC', mediterranean: '#F0FFF4', chinese: '#FFF6EC',
   french: '#FFF5EC', vietnamese: '#FFF4EC', greek: '#F5FFF0',
 }
 
-function buildTags(food) {
-  const tags = []
+function buildTags(food: FoodItem): string[] {
+  const tags: string[] = []
   if (food.spice_level > 0.6) tags.push('Spicy')
   if (food.sweetness > 0.6) tags.push('Sweet')
   if (food.richness > 0.7) tags.push('Rich')
@@ -27,23 +28,39 @@ function buildTags(food) {
   return tags.slice(0, 3)
 }
 
-export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled }, ref) {
-  const [animDir, setAnimDir] = useState(null) // 'left' | 'right' | null
+export interface SwipeCardHandle {
+  swipe: (direction: SwipeDirection) => void
+}
 
-  const handleSwipe = useCallback((direction) => {
-    if (animDir || disabled) return
-    setAnimDir(direction)
-    setTimeout(() => {
-      setAnimDir(null)
-      onSwipe(direction)
-    }, 380)
-  }, [animDir, disabled, onSwipe])
+interface SwipeCardProps {
+  food: FoodItem
+  onSwipe: (direction: SwipeDirection) => void
+  disabled: boolean
+}
+
+export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function SwipeCard(
+  { food, onSwipe, disabled },
+  ref,
+) {
+  const [animDir, setAnimDir] = useState<SwipeDirection | null>(null)
+
+  const handleSwipe = useCallback(
+    (direction: SwipeDirection) => {
+      if (animDir || disabled) return
+      setAnimDir(direction)
+      setTimeout(() => {
+        setAnimDir(null)
+        onSwipe(direction)
+      }, 380)
+    },
+    [animDir, disabled, onSwipe],
+  )
 
   useImperativeHandle(ref, () => ({ swipe: handleSwipe }), [handleSwipe])
 
-  const cuisine = food.cuisine_type?.toLowerCase() || ''
-  const emoji = CUISINE_EMOJI[cuisine] || '🍽️'
-  const bgColor = CUISINE_BG[cuisine] || '#FFF4EC'
+  const cuisine = food.cuisine_type?.toLowerCase() ?? ''
+  const emoji = CUISINE_EMOJI[cuisine] ?? '🍽️'
+  const bgColor = CUISINE_BG[cuisine] ?? '#FFF4EC'
   const tags = buildTags(food)
 
   return (
@@ -67,7 +84,6 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
           : 'none',
       }}>
 
-        {/* Emoji */}
         <div style={{
           display: 'flex',
           alignItems: 'center',
@@ -83,7 +99,6 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
           </span>
         </div>
 
-        {/* Food info */}
         <div style={{ padding: '0 28px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>
           {food.cuisine_type && (
             <p style={{
@@ -121,10 +136,8 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
           )}
         </div>
 
-        {/* Divider */}
         <div style={{ height: 1, background: '#E8E0D8', margin: '0 24px' }} />
 
-        {/* Buttons */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
           gap: 40, padding: '24px 28px 8px',
@@ -180,7 +193,6 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
         </p>
       </div>
 
-      {/* NOPE overlay */}
       {animDir === 'left' && (
         <div style={{
           position: 'absolute', top: 60, left: 28, fontSize: '2.2rem',
@@ -193,7 +205,6 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
         </div>
       )}
 
-      {/* LIKE overlay */}
       {animDir === 'right' && (
         <div style={{
           position: 'absolute', top: 60, right: 28, fontSize: '2.2rem',

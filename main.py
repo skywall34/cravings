@@ -29,6 +29,7 @@ _db_path: Path = Path("cravings.db")  # resolved in lifespan from env
 _model_service: ModelService | None = None
 _places: PlacesAdapter = PlacesAdapter()
 _sessions: swipe.SessionStore = swipe.SessionStore()
+_session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
 
 
 @asynccontextmanager
@@ -172,7 +173,9 @@ async def swipe_endpoint(body: dict, user=Depends(_get_user), conn=Depends(_get_
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
-    return {"success": True, "total_swipes": total_swipes}
+    seen_count = await _sessions.count(session_id)
+    session_complete = seen_count >= _session_max_swipes
+    return {"success": True, "total_swipes": total_swipes, "session_complete": session_complete}
 
 
 @app.post("/api/session/reset")

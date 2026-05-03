@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sqlite3
 
 import db.database as db
@@ -33,7 +34,8 @@ async def record_swipe(
     if snapshot.user_id != user["id"]:
         raise SwipeError("snapshot user mismatch")
 
-    reward = 1 if direction == "right" else 0
+    left_reward = float(os.environ.get("CRAVINGS_LEFT_SWIPE_REWARD", "0.3"))
+    reward = 1.0 if direction == "right" else left_reward
     total = await asyncio.to_thread(
         model_service.record_swipe, user["id"], item, snapshot.to_context(), reward
     )

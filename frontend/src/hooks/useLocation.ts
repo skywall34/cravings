@@ -1,11 +1,21 @@
 import { useState, useCallback } from 'react'
 
-export function useLocation() {
-  const [location, setLocation] = useState(null)
-  const [error, setError] = useState(null)
+interface Location {
+  lat: number
+  lng: number
+}
 
-  // Returns {lat, lng} — prompts the browser if not yet granted.
-  const requestLocation = useCallback(() => {
+interface UseLocationReturn {
+  location: Location | null
+  error: string | null
+  requestLocation: () => Promise<Location>
+}
+
+export function useLocation(): UseLocationReturn {
+  const [location, setLocation] = useState<Location | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const requestLocation = useCallback((): Promise<Location> => {
     return new Promise((resolve, reject) => {
       if (location) {
         resolve(location)
@@ -19,15 +29,15 @@ export function useLocation() {
       }
       navigator.geolocation.getCurrentPosition(
         (pos) => {
-          const loc = { lat: pos.coords.latitude, lng: pos.coords.longitude }
+          const loc: Location = { lat: pos.coords.latitude, lng: pos.coords.longitude }
           setLocation(loc)
           resolve(loc)
         },
-        (err) => {
+        () => {
           const msg = 'Location access denied — restaurant suggestions unavailable'
           setError(msg)
           reject(new Error(msg))
-        }
+        },
       )
     })
   }, [location])

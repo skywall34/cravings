@@ -94,7 +94,7 @@ class ThompsonSamplingModel:
         scores = self.score_items(items, context)
         return scores[0][0]
 
-    def record_swipe(self, item: dict, context: dict, reward: int) -> None:
+    def record_swipe(self, item: dict, context: dict, reward: float) -> None:
         """Update posterior after observing swipe (reward=1 right, 0 left).
 
         Uses Laplace approximation update:

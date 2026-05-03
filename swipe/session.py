@@ -22,6 +22,12 @@ class SessionStore:
         async with self._lock:
             self._seen.setdefault(session_id, set()).add(item_id)
 
+    async def count(self, session_id: str) -> int:
+        if not session_id:
+            return 0
+        async with self._lock:
+            return len(self._seen.get(session_id, set()))
+
     async def reset(self, session_id: str) -> None:
         async with self._lock:
             self._seen.pop(session_id, None)
