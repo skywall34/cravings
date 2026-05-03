@@ -127,51 +127,49 @@ export const SwipeCard = forwardRef(function SwipeCard({ food, onSwipe, disabled
         {/* Buttons */}
         <div style={{
           display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: 32, padding: '24px 28px 8px', position: 'relative',
+          gap: 40, padding: '24px 28px 8px',
         }}>
-          <button
-            style={{
-              width: 72, height: 72, borderRadius: '50%',
-              border: '2.5px solid #DC2626', background: 'rgba(220,38,38,0.06)',
-              color: '#DC2626', cursor: disabled ? 'not-allowed' : 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 28, transition: 'transform 0.15s ease',
-              boxShadow: '0 4px 16px rgba(220,38,38,0.12)', opacity: disabled ? 0.4 : 1,
-            }}
-            onClick={() => handleSwipe('left')}
-            disabled={disabled || !!animDir}
-            onMouseEnter={e => { if (!disabled) e.currentTarget.style.transform = 'scale(1.12)' }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
-            aria-label="Not for me"
-          >✕</button>
-
-          <div style={{
-            display: 'flex', gap: 48, position: 'absolute',
-            bottom: -4, left: '50%', transform: 'translateX(-50%)',
-          }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            <button
+              style={{
+                width: 72, height: 72, borderRadius: '50%',
+                border: '2.5px solid #DC2626', background: 'rgba(220,38,38,0.06)',
+                color: '#DC2626', cursor: disabled ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 28, transition: 'transform 0.15s ease',
+                boxShadow: '0 4px 16px rgba(220,38,38,0.12)', opacity: disabled ? 0.4 : 1,
+              }}
+              onClick={() => handleSwipe('left')}
+              disabled={disabled || !!animDir}
+              onMouseEnter={e => { if (!disabled) e.currentTarget.style.transform = 'scale(1.12)' }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
+              aria-label="Not for me"
+            >✕</button>
             <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#DC2626', letterSpacing: '0.04em' }}>
               not for me
             </span>
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+            <button
+              style={{
+                width: 72, height: 72, borderRadius: '50%',
+                border: 'none', background: '#16A34A', color: '#FFFFFF',
+                cursor: disabled ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 28, transition: 'transform 0.15s ease',
+                boxShadow: '0 4px 16px rgba(22,163,74,0.30)', opacity: disabled ? 0.4 : 1,
+              }}
+              onClick={() => handleSwipe('right')}
+              disabled={disabled || !!animDir}
+              onMouseEnter={e => { if (!disabled) e.currentTarget.style.transform = 'scale(1.12)' }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
+              aria-label="Yes"
+            >✓</button>
             <span style={{ fontSize: '0.72rem', fontWeight: 600, color: '#16A34A', letterSpacing: '0.04em' }}>
               yes!
             </span>
           </div>
-
-          <button
-            style={{
-              width: 72, height: 72, borderRadius: '50%',
-              border: 'none', background: '#16A34A', color: '#FFFFFF',
-              cursor: disabled ? 'not-allowed' : 'pointer',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 28, transition: 'transform 0.15s ease',
-              boxShadow: '0 4px 16px rgba(22,163,74,0.30)', opacity: disabled ? 0.4 : 1,
-            }}
-            onClick={() => handleSwipe('right')}
-            disabled={disabled || !!animDir}
-            onMouseEnter={e => { if (!disabled) e.currentTarget.style.transform = 'scale(1.12)' }}
-            onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)' }}
-            aria-label="Yes"
-          >✓</button>
         </div>
 
         <p style={{
