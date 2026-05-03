@@ -404,6 +404,28 @@ async def test_nearby_unknown_item(auth_client):
     assert resp.status_code == 404
 
 
+async def test_nearby_places_error_returns_502(auth_client):
+    from unittest.mock import AsyncMock, patch
+    from places.adapter import PlacesError
+
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+    with patch.object(main._places, "search", new=AsyncMock(side_effect=PlacesError("places API returned 403"))):
+        resp = await client.get(f"/api/nearby?food_item_id={item_id}&lat=37.77&lng=-122.41")
+    assert resp.status_code == 502
+    assert "places API returned 403" in resp.json()["detail"]
+
+
+async def test_nearby_response_shape(auth_client):
+    """Verify each result has all four required fields."""
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+    resp = await client.get(f"/api/nearby?food_item_id={item_id}&lat=37.77&lng=-122.41")
+    assert resp.status_code == 200
+    for place in resp.json():
+        assert set(place.keys()) >= {"name", "address", "rating", "maps_url"}
+
+
 # ---------------------------------------------------------------------------
 # Admin batch
 # ---------------------------------------------------------------------------
