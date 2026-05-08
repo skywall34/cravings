@@ -29,13 +29,14 @@ async def record_swipe(
     session_id: str,
 ) -> int:
     """Full Right-Swipe / Left-Swipe contract. Returns total_swipes after update."""
-    if direction not in ("right", "left"):
-        raise SwipeError("direction must be 'right' or 'left'")
+    if direction not in ("right", "left", "never"):
+        raise SwipeError("direction must be 'right', 'left', or 'never'")
     if snapshot.user_id != user["id"]:
         raise SwipeError("snapshot user mismatch")
 
     left_reward = float(os.environ.get("CRAVINGS_LEFT_SWIPE_REWARD", "0.3"))
-    reward = 1.0 if direction == "right" else left_reward
+    never_reward = float(os.environ.get("CRAVINGS_NEVER_REWARD", "0.0"))
+    reward = 1.0 if direction == "right" else (never_reward if direction == "never" else left_reward)
     total = await asyncio.to_thread(
         model_service.record_swipe, user["id"], item, snapshot.to_context(), reward
     )

@@ -35,7 +35,7 @@ export interface Restaurant {
   rating: number
 }
 
-export type SwipeDirection = 'left' | 'right'
+export type SwipeDirection = 'left' | 'right' | 'never'
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = {
@@ -59,6 +59,14 @@ export async function ensureUser(): Promise<void> {
   if (getToken()) return
   const data = await request<{ api_token: string }>('POST', '/api/users', { name: 'guest' })
   setToken(data.api_token)
+}
+
+export async function getMe(): Promise<{ onboarding_complete: boolean }> {
+  return request<{ onboarding_complete: boolean }>('GET', '/api/users/me')
+}
+
+export async function postOnboarding(prefs: Record<string, number>): Promise<void> {
+  await request('POST', '/api/onboarding', { preferences: prefs })
 }
 
 export async function getRecommendation(
