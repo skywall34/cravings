@@ -43,7 +43,8 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
-  const res = await fetch(path, opts)
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const res = await fetch(base + path, opts)
   const data: unknown = await res.json()
   if (!res.ok) {
     const errMsg =

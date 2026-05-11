@@ -9,6 +9,7 @@ from pathlib import Path
 from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -43,7 +44,9 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+_base_path = os.environ.get("BASE_PATH", "")
+
+app = FastAPI(lifespan=lifespan, root_path=_base_path)
 _bearer = HTTPBearer()
 
 
@@ -293,6 +296,15 @@ async def admin_batch(body: dict):
         "food_items_inserted": len(item_ids),
         "tagging": "queued",
     }
+
+
+# ---------------------------------------------------------------------------
+# Static files (SPA) — must be mounted after all API routes
+# ---------------------------------------------------------------------------
+
+_dist = Path("frontend/dist")
+if _dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_dist), html=True), name="static")
 
 
 # ---------------------------------------------------------------------------
