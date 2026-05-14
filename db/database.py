@@ -4,6 +4,8 @@ import secrets
 import sqlite3
 from pathlib import Path
 
+import bcrypt as _bcrypt
+
 from tagging.safety import DIETARY_FLAGS, SAFETY_FLAGS
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
@@ -84,11 +86,30 @@ def init_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent column adds for existing databases."""
-    cols = {r["name"] for r in conn.execute("PRAGMA table_info(swipe_events)").fetchall()}
-    if "recent_rejection_rate" not in cols:
+    swipe_cols = {r["name"] for r in conn.execute("PRAGMA table_info(swipe_events)").fetchall()}
+    if "recent_rejection_rate" not in swipe_cols:
         conn.execute("ALTER TABLE swipe_events ADD COLUMN recent_rejection_rate REAL NOT NULL DEFAULT 0.0")
-    if "days_since_last_session" not in cols:
+    if "days_since_last_session" not in swipe_cols:
         conn.execute("ALTER TABLE swipe_events ADD COLUMN days_since_last_session REAL NOT NULL DEFAULT 0.0")
+
+    user_cols = {r["name"] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "email" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "password_hash" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_hash TEXT")
+    if "password_changed_at" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN password_changed_at TIMESTAMP")
+    if "token_issued_at" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN token_issued_at TIMESTAMP")
+        conn.execute("UPDATE users SET token_issued_at = CURRENT_TIMESTAMP WHERE token_issued_at IS NULL")
+
+    try:
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL"
+        )
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
 
 
@@ -255,6 +276,144 @@ def mark_onboarding_complete(conn: sqlite3.Connection, user_id: int) -> None:
         [user_id],
     )
     conn.commit()
+
+
+def get_user_by_email(conn: sqlite3.Connection, email: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM users WHERE email = ?", [email.lower()]
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def attach_credentials(conn: sqlite3.Connection, user_id: int, email: str, password_hash: str) -> None:
+    """Claim a guest row by attaching email + password (register-while-guest)."""
+    conn.execute(
+        "UPDATE users SET email = ?, password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [email.lower(), password_hash, user_id],
+    )
+    conn.commit()
+
+
+def create_registered_user(
+    conn: sqlite3.Connection, email: str, password_hash: str, name: str
+) -> tuple[int, str]:
+    """Create a brand-new registered user (cold register). Returns (user_id, api_token)."""
+    token = generate_api_token()
+    cursor = conn.execute(
+        "INSERT INTO users (name, api_token, email, password_hash) VALUES (?, ?, ?, ?)",
+        [name, token, email.lower(), password_hash],
+    )
+    conn.commit()
+    return cursor.lastrowid, token
+
+
+def rotate_api_token(conn: sqlite3.Connection, user_id: int) -> str:
+    new_token = generate_api_token()
+    conn.execute(
+        "UPDATE users SET api_token = ?, token_issued_at = CURRENT_TIMESTAMP, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [new_token, user_id],
+    )
+    conn.commit()
+    return new_token
+
+
+def update_password(conn: sqlite3.Connection, user_id: int, password_hash: str) -> str:
+    """Update password hash, record changed_at, rotate token. Returns new token."""
+    new_token = generate_api_token()
+    conn.execute(
+        "UPDATE users SET password_hash = ?, password_changed_at = CURRENT_TIMESTAMP, "
+        "api_token = ?, token_issued_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP "
+        "WHERE id = ?",
+        [password_hash, new_token, user_id],
+    )
+    conn.commit()
+    return new_token
+
+
+def hash_password(plain: str) -> str:
+    return _bcrypt.hashpw(plain.encode(), _bcrypt.gensalt()).decode()
+
+
+def verify_password(plain: str, hashed: str) -> bool:
+    return _bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
+    # Cuisine breakdown by direction
+    cuisine_rows = conn.execute(
+        "SELECT f.cuisine_type, se.direction, COUNT(*) AS n "
+        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
+        "WHERE se.user_id = ? GROUP BY f.cuisine_type, se.direction ORDER BY n DESC",
+        [user_id],
+    ).fetchall()
+    cuisine_map: dict[str, dict] = {}
+    for r in cuisine_rows:
+        c = r["cuisine_type"] or "other"
+        if c not in cuisine_map:
+            cuisine_map[c] = {"cuisine": c, "right": 0, "left": 0}
+        cuisine_map[c][r["direction"]] = r["n"]
+    cuisine_breakdown = sorted(
+        cuisine_map.values(), key=lambda x: x["right"] + x["left"], reverse=True
+    )
+
+    # Avg swipes to right (compute in Python: runs of lefts before each right)
+    events = conn.execute(
+        "SELECT direction FROM swipe_events WHERE user_id = ? ORDER BY timestamp ASC",
+        [user_id],
+    ).fetchall()
+    runs: list[int] = []
+    lefts = 0
+    for e in events:
+        if e["direction"] == "left":
+            lefts += 1
+        else:
+            runs.append(lefts)
+            lefts = 0
+    avg_swipes_to_right = round(sum(runs) / len(runs), 1) if runs else None
+
+    # Mood breakdown
+    mood_rows = conn.execute(
+        "SELECT mood, direction, COUNT(*) AS n FROM swipe_events "
+        "WHERE user_id = ? GROUP BY mood, direction",
+        [user_id],
+    ).fetchall()
+    mood_map: dict[str, dict] = {}
+    for r in mood_rows:
+        m = r["mood"] or "no_preference"
+        if m not in mood_map:
+            mood_map[m] = {"mood": m, "right": 0, "left": 0}
+        mood_map[m][r["direction"]] = r["n"]
+    mood_breakdown = list(mood_map.values())
+
+    # Hour-of-day breakdown
+    hour_rows = conn.execute(
+        "SELECT CAST(time_of_day AS INTEGER) AS hour, direction, COUNT(*) AS n "
+        "FROM swipe_events WHERE user_id = ? AND time_of_day IS NOT NULL "
+        "GROUP BY hour, direction ORDER BY hour",
+        [user_id],
+    ).fetchall()
+    hour_map: dict[int, dict] = {}
+    for r in hour_rows:
+        h = r["hour"]
+        if h not in hour_map:
+            hour_map[h] = {"hour": h, "right": 0, "left": 0}
+        hour_map[h][r["direction"]] = r["n"]
+    hour_breakdown = sorted(hour_map.values(), key=lambda x: x["hour"])
+
+    # Totals from users row
+    user_row = conn.execute(
+        "SELECT total_swipes, drift_active FROM users WHERE id = ?", [user_id]
+    ).fetchone()
+
+    return {
+        "total_swipes": user_row["total_swipes"] if user_row else 0,
+        "drift_active": bool(user_row["drift_active"]) if user_row else False,
+        "cuisine_breakdown": cuisine_breakdown,
+        "avg_swipes_to_right": avg_swipes_to_right,
+        "mood_breakdown": mood_breakdown,
+        "hour_breakdown": hour_breakdown,
+    }
 
 
 def update_food_item_tags(conn: sqlite3.Connection, item_id: int, tags: dict) -> None:

@@ -23,6 +23,13 @@ CREATE TABLE IF NOT EXISTS users (
     drift_active INTEGER NOT NULL DEFAULT 0,   -- 0/1 boolean
 
     onboarding_complete INTEGER NOT NULL DEFAULT 0,
+
+    -- Auth (NULL = guest, NOT NULL = registered)
+    email TEXT,
+    password_hash TEXT,
+    password_changed_at TIMESTAMP,
+    token_issued_at TIMESTAMP,
+
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

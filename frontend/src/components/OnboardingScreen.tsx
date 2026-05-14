@@ -63,9 +63,10 @@ function PrefSlider({ emoji, label, lo, hi, value, onChange }: PrefSliderProps) 
 interface OnboardingScreenProps {
   onComplete: () => void
   onSkip: () => void
+  hasExistingProfile?: boolean
 }
 
-export function OnboardingScreen({ onComplete, onSkip }: OnboardingScreenProps) {
+export function OnboardingScreen({ onComplete, onSkip, hasExistingProfile = false }: OnboardingScreenProps) {
   const [prefs, setPrefs] = useState<Record<PrefKey, number>>({
     spice: 0, sweet: 0, sour: 0, texture: 0, richness: 0,
   })
@@ -113,14 +114,12 @@ export function OnboardingScreen({ onComplete, onSkip }: OnboardingScreenProps) 
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      {/* Hero */}
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '32px 0 24px', textAlign: 'center' }}>
-        <div style={{ fontSize: 48, lineHeight: 1, marginBottom: 4 }}>🍽️</div>
-        <h1 style={{ fontSize: '2.2rem', fontWeight: 900, letterSpacing: '-0.02em', lineHeight: 1, margin: 0, color: '#E85D04' }}>
-          Cravings
-        </h1>
-        <p style={{ fontSize: '0.95rem', color: '#6B6B6B', lineHeight: 1.6, margin: 0, marginTop: 4 }}>
-          Let's learn your taste.<br />A few quick questions — or just dive in.
+      {/* Tagline */}
+      <div style={{ padding: '16px 0 20px', textAlign: 'center' }}>
+        <p style={{ fontSize: '0.95rem', color: '#6B6B6B', lineHeight: 1.6, margin: 0 }}>
+          {hasExistingProfile
+            ? 'Update your taste profile, or skip to use your saved one.'
+            : 'Let\'s learn your taste. A few quick questions — or just dive in.'}
         </p>
       </div>
 
@@ -178,7 +177,7 @@ export function OnboardingScreen({ onComplete, onSkip }: OnboardingScreenProps) 
             onMouseEnter={e => { e.currentTarget.style.color = '#E85D04' }}
             onMouseLeave={e => { e.currentTarget.style.color = '#B0A89E' }}
           >
-            skip for now →
+            {hasExistingProfile ? 'use saved profile →' : 'skip for now →'}
           </button>
         </div>
       </div>

@@ -7,8 +7,10 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
+from email_validator import EmailNotValidError, validate_email
 from fastapi import Depends, FastAPI, HTTPException, Query, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security.http import HTTPBearer as _OptionalBearer
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -48,6 +50,7 @@ _base_path = os.environ.get("BASE_PATH", "")
 
 app = FastAPI(lifespan=lifespan, root_path=_base_path)
 _bearer = HTTPBearer()
+_optional_bearer = HTTPBearer(auto_error=False)
 
 
 # ---------------------------------------------------------------------------
@@ -69,6 +72,12 @@ async def _get_user(
     user = db.get_user_by_token(conn, credentials.credentials)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
+    if (
+        user["password_changed_at"]
+        and user["token_issued_at"]
+        and user["token_issued_at"] < user["password_changed_at"]
+    ):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token invalidated")
     return user
 
 
@@ -105,6 +114,8 @@ async def get_me(user=Depends(_get_user)):
     return {
         "id": user["id"],
         "name": user["name"],
+        "email": user["email"],
+        "is_registered": user["email"] is not None,
         "dietary_restrictions": safety.dietary_list_from_bitmask(user["dietary_flags_bitmask"]),
         "safety_overrides": safety.safety_list_from_bitmask(user["safety_overrides_bitmask"]),
         "onboarding_complete": bool(user["onboarding_complete"]),
@@ -228,6 +239,106 @@ async def nearby(
         return await _places.search(item["name"], fallback, lat, lng)
     except PlacesError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
+
+
+# ---------------------------------------------------------------------------
+# Auth routes
+# ---------------------------------------------------------------------------
+
+def _validate_email(raw: str) -> str:
+    try:
+        return validate_email(raw, check_deliverability=False).normalized
+    except EmailNotValidError as e:
+        raise HTTPException(status_code=400, detail=f"invalid email: {e}") from e
+
+
+@app.post("/api/auth/register", status_code=201)
+async def auth_register(
+    body: dict,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+    conn=Depends(_get_conn),
+):
+    email = _validate_email((body.get("email") or "").strip())
+    password = (body.get("password") or "").strip()
+    name = (body.get("name") or "").strip()
+    if not password or len(password) < 8:
+        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+
+    existing = db.get_user_by_email(conn, email)
+    if existing:
+        raise HTTPException(status_code=409, detail="email already registered, please log in")
+
+    password_hash = db.hash_password(password)
+
+    if credentials:
+        guest = db.get_user_by_token(conn, credentials.credentials)
+        if guest and guest["email"] is None:
+            db.attach_credentials(conn, guest["id"], email, password_hash)
+            return {
+                "id": guest["id"],
+                "name": guest["name"],
+                "email": email,
+                "api_token": credentials.credentials,
+                "is_registered": True,
+                "onboarding_complete": bool(guest["onboarding_complete"]),
+            }
+
+    if not name:
+        raise HTTPException(status_code=400, detail="name required for new registration")
+    user_id, token = db.create_registered_user(conn, email, password_hash, name)
+    return {
+        "id": user_id,
+        "name": name,
+        "email": email,
+        "api_token": token,
+        "is_registered": True,
+        "onboarding_complete": False,
+    }
+
+
+@app.post("/api/auth/login")
+async def auth_login(body: dict, conn=Depends(_get_conn)):
+    email = _validate_email((body.get("email") or "").strip())
+    password = (body.get("password") or "").strip()
+
+    user = db.get_user_by_email(conn, email)
+    if not user or not user["password_hash"] or not db.verify_password(password, user["password_hash"]):
+        await asyncio.sleep(0.25)
+        raise HTTPException(status_code=401, detail="invalid email or password")
+
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "api_token": user["api_token"],
+        "is_registered": True,
+        "onboarding_complete": bool(user["onboarding_complete"]),
+    }
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(user=Depends(_get_user), conn=Depends(_get_conn)):
+    db.rotate_api_token(conn, user["id"])
+    return {"success": True}
+
+
+@app.post("/api/auth/password")
+async def auth_change_password(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
+    if not user["password_hash"]:
+        raise HTTPException(status_code=400, detail="guest users cannot change password")
+    old_password = (body.get("old_password") or "").strip()
+    new_password = (body.get("new_password") or "").strip()
+    if not db.verify_password(old_password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="incorrect current password")
+    if len(new_password) < 8:
+        raise HTTPException(status_code=400, detail="new password must be at least 8 characters")
+    new_token = db.update_password(conn, user["id"], db.hash_password(new_password))
+    return {"success": True, "api_token": new_token}
+
+
+@app.get("/api/profile/stats")
+async def profile_stats(user=Depends(_get_user), conn=Depends(_get_conn)):
+    return db.get_swipe_stats(conn, user["id"])
 
 
 # ---------------------------------------------------------------------------

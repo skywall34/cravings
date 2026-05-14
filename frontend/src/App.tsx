@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby } from './api'
-import type { FoodItem, Restaurant, SwipeDirection } from './api'
+import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout } from './api'
+import type { FoodItem, Restaurant, SwipeDirection, UserInfo } from './api'
 import { useLocation } from './hooks/useLocation'
 import { SwipeCard } from './components/SwipeCard'
 import type { SwipeCardHandle } from './components/SwipeCard'
@@ -11,6 +11,10 @@ import type { SwipeEntry } from './components/SessionSummary'
 import { MoodSelector } from './components/MoodSelector'
 import type { MoodOption, DietOption } from './components/MoodSelector'
 import { moodToApi, dietToApi } from './components/MoodSelector'
+import { AuthMenu } from './components/AuthMenu'
+import { LoginForm } from './components/LoginForm'
+import { RegisterForm } from './components/RegisterForm'
+import { ProfilePage } from './components/ProfilePage'
 import './App.css'
 
 const SESSION_MAX = 10
@@ -19,11 +23,20 @@ function randomId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
-function AppHeader() {
+function AppHeader({ user, onLogin, onRegister, onProfile, onLogout }: {
+  user: UserInfo | null
+  onLogin: () => void
+  onRegister: () => void
+  onProfile: () => void
+  onLogout: () => void
+}) {
   return (
-    <header className="app-header">
-      <span className="app-header-emoji">🍽️</span>
-      <h1 className="app-title">Cravings</h1>
+    <header className="app-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span className="app-header-emoji">🍽️</span>
+        <h1 className="app-title">Cravings</h1>
+      </div>
+      <AuthMenu user={user} onLogin={onLogin} onRegister={onRegister} onProfile={onProfile} onLogout={onLogout} />
     </header>
   )
 }
@@ -54,13 +67,14 @@ function SessionProgress({ count, total }: SessionProgressProps) {
   )
 }
 
-type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary'
+type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile'
 
 export default function App() {
   const sessionId = useRef(randomId())
   const swipeCardRef = useRef<SwipeCardHandle | null>(null)
 
   const [screen, setScreen] = useState<Screen>('swipe')
+  const [prevScreen, setPrevScreen] = useState<Screen>('swipe')
   const [food, setFood] = useState<FoodItem | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -71,8 +85,18 @@ export default function App() {
   const [cardKey, setCardKey] = useState(0)
   const [mood, setMood] = useState<MoodOption>('Any')
   const [dietary, setDietary] = useState<DietOption>('Standard')
+  const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
 
   const { requestLocation } = useLocation()
+
+  function navigateTo(next: Screen) {
+    setPrevScreen(screen)
+    setScreen(next)
+  }
+
+  function navigateBack() {
+    setScreen(prevScreen === screen ? 'swipe' : prevScreen)
+  }
 
   const swipeCount = swipeHistory.length
 
@@ -81,19 +105,9 @@ export default function App() {
       try {
         await ensureUser()
         const me = await getMe()
-        const hasToken = !!localStorage.getItem('cravings_token')
-        if (!me.onboarding_complete && hasToken) {
-          // token exists but onboarding not done — show onboarding before swipe
-          setScreen('onboarding')
-          setLoading(false)
-          return
-        }
-        if (!hasToken) {
-          setScreen('onboarding')
-          setLoading(false)
-          return
-        }
-        await loadNextCard()
+        setCurrentUser(me)
+        setScreen('onboarding')
+        setLoading(false)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
         setLoading(false)
@@ -198,6 +212,20 @@ export default function App() {
     await loadNextCard()
   }
 
+  async function handleLogout() {
+    await logout()
+    setCurrentUser(null)
+    setScreen('swipe')
+    await ensureUser()
+    const me = await getMe()
+    setCurrentUser(me)
+    if (!me.onboarding_complete) {
+      setScreen('onboarding')
+    } else {
+      await loadNextCard()
+    }
+  }
+
   if (loading && screen === 'swipe' && !food) {
     return (
       <div className="center-screen">
@@ -206,20 +234,50 @@ export default function App() {
     )
   }
 
+  const authMenuProps = {
+    user: currentUser,
+    onLogin: () => navigateTo('login'),
+    onRegister: () => navigateTo('register'),
+    onProfile: () => navigateTo('profile'),
+    onLogout: () => void handleLogout(),
+  }
+
   return (
     <div className="app">
-      {screen !== 'onboarding' && <AppHeader />}
+      <AppHeader {...authMenuProps} />
+
+      {screen === 'login' && (
+        <LoginForm
+          onSuccess={user => { setCurrentUser(user); navigateBack() }}
+          onSwitchToRegister={() => setScreen('register')}
+          onBack={navigateBack}
+        />
+      )}
+
+      {screen === 'register' && (
+        <RegisterForm
+          onSuccess={user => { setCurrentUser(user); navigateBack() }}
+          onSwitchToLogin={() => setScreen('login')}
+          onBack={navigateBack}
+          isGuest={currentUser !== null && !currentUser.is_registered}
+        />
+      )}
+
+      {screen === 'profile' && currentUser && (
+        <ProfilePage user={currentUser} onBack={navigateBack} />
+      )}
 
       {screen === 'onboarding' && (
         <div className="card-enter" style={{ width: '100%' }}>
           <OnboardingScreen
             onComplete={() => void handleOnboardingComplete()}
             onSkip={() => void handleOnboardingSkip()}
+            hasExistingProfile={currentUser?.onboarding_complete ?? false}
           />
         </div>
       )}
 
-      {screen === 'swipe' && (
+      {screen !== 'login' && screen !== 'register' && screen !== 'profile' && screen === 'swipe' && (
         <>
           <SessionProgress count={swipeCount} total={SESSION_MAX} />
           <MoodSelector

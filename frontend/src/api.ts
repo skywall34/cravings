@@ -48,12 +48,33 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   const data: unknown = await res.json()
   if (!res.ok) {
     const errMsg =
-      data !== null && typeof data === 'object' && 'error' in data
-        ? String((data as { error: unknown }).error)
+      data !== null && typeof data === 'object' && 'detail' in data
+        ? String((data as { detail: unknown }).detail)
         : `HTTP ${res.status}`
     throw new Error(errMsg)
   }
   return data as T
+}
+
+export interface UserInfo {
+  id: number
+  name: string
+  email: string | null
+  is_registered: boolean
+  onboarding_complete: boolean
+}
+
+export interface AuthResult extends UserInfo {
+  api_token: string
+}
+
+export interface SwipeStats {
+  total_swipes: number
+  drift_active: boolean
+  cuisine_breakdown: { cuisine: string; right: number; left: number }[]
+  avg_swipes_to_right: number | null
+  mood_breakdown: { mood: string; right: number; left: number }[]
+  hour_breakdown: { hour: number; right: number; left: number }[]
 }
 
 export async function ensureUser(): Promise<void> {
@@ -62,8 +83,59 @@ export async function ensureUser(): Promise<void> {
   setToken(data.api_token)
 }
 
-export async function getMe(): Promise<{ onboarding_complete: boolean }> {
-  return request<{ onboarding_complete: boolean }>('GET', '/api/users/me')
+export async function getMe(): Promise<UserInfo> {
+  return request<UserInfo>('GET', '/api/users/me')
+}
+
+async function requestNoAuth<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const opts: RequestInit = {
+    method,
+    headers: { 'Content-Type': 'application/json' },
+  }
+  if (body !== undefined) opts.body = JSON.stringify(body)
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const res = await fetch(base + path, opts)
+  const data: unknown = await res.json()
+  if (!res.ok) {
+    const errMsg =
+      data !== null && typeof data === 'object' && 'detail' in data
+        ? String((data as { detail: unknown }).detail)
+        : `HTTP ${res.status}`
+    throw new Error(errMsg)
+  }
+  return data as T
+}
+
+export async function register(email: string, password: string, name?: string): Promise<AuthResult> {
+  const result = await request<AuthResult>('POST', '/api/auth/register', { email, password, name })
+  setToken(result.api_token)
+  return result
+}
+
+export async function login(email: string, password: string): Promise<AuthResult> {
+  const result = await requestNoAuth<AuthResult>('POST', '/api/auth/login', { email, password })
+  setToken(result.api_token)
+  return result
+}
+
+export async function logout(): Promise<void> {
+  try {
+    await request('POST', '/api/auth/logout')
+  } finally {
+    localStorage.removeItem(TOKEN_KEY)
+  }
+}
+
+export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
+  const result = await request<{ api_token: string }>('POST', '/api/auth/password', {
+    old_password: oldPassword,
+    new_password: newPassword,
+  })
+  setToken(result.api_token)
+}
+
+export async function fetchStats(): Promise<SwipeStats> {
+  return request<SwipeStats>('GET', '/api/profile/stats')
 }
 
 export async function postOnboarding(prefs: Record<string, number>): Promise<void> {
