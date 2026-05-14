@@ -146,6 +146,18 @@ def insert_restaurant(conn: sqlite3.Connection, restaurant: dict) -> int:
     return cursor.lastrowid
 
 
+def get_restaurant_by_name(conn: sqlite3.Connection, name: str) -> dict | None:
+    row = conn.execute("SELECT * FROM restaurants WHERE name = ?", [name]).fetchone()
+    return dict(row) if row else None
+
+
+def get_food_item_by_name(conn: sqlite3.Connection, name: str, restaurant_id: int) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM food_items WHERE name = ? AND restaurant_id = ?", [name, restaurant_id]
+    ).fetchone()
+    return dict(row) if row else None
+
+
 def get_untagged_items(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, name, description FROM food_items WHERE tagging_status = 'pending'"
