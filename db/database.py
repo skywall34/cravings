@@ -103,6 +103,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN token_issued_at TIMESTAMP")
         conn.execute("UPDATE users SET token_issued_at = CURRENT_TIMESTAMP WHERE token_issued_at IS NULL")
 
+    food_cols = {r["name"] for r in conn.execute("PRAGMA table_info(food_items)").fetchall()}
+    if "embedding" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN embedding BLOB")
+
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL"
@@ -426,6 +430,22 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "mood_breakdown": mood_breakdown,
         "hour_breakdown": hour_breakdown,
     }
+
+
+def get_items_without_embedding(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, name, description, cuisine_type, protein_type "
+        "FROM food_items WHERE tagging_status = 'tagged' AND embedding IS NULL"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_food_item_embedding(conn: sqlite3.Connection, item_id: int, embedding: bytes) -> None:
+    conn.execute(
+        "UPDATE food_items SET embedding = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [embedding, item_id],
+    )
+    conn.commit()
 
 
 def update_food_item_tags(conn: sqlite3.Connection, item_id: int, tags: dict) -> None:

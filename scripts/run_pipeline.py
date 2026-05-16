@@ -10,6 +10,7 @@ from db.database import (
     init_db, insert_restaurant, insert_food_item,
     get_untagged_items, update_food_item_tags,
     get_restaurant_by_name, get_food_item_by_name,
+    get_connection,
 )
 from tagging.client import tag_food_item
 from scripts.seed_data import SEED_RESTAURANTS, SEED_FOOD_ITEMS
@@ -81,12 +82,16 @@ def main():
     parser.add_argument("--db", type=str, help="Database path (default: cravings.db)")
     parser.add_argument("--seed-only", action="store_true", help="Only seed, don't tag")
     parser.add_argument("--tag-only", action="store_true", help="Only tag existing untagged items")
+    parser.add_argument("--embed-only", action="store_true", help="Only embed tagged items missing embeddings")
     args = parser.parse_args()
 
     db_path = Path(args.db) if args.db else None
 
-    if args.tag_only:
-        from db.database import get_connection
+    if args.embed_only:
+        from scripts.embed_items import embed_all
+        conn = get_connection(db_path) if db_path else get_connection()
+        embed_all(conn)
+    elif args.tag_only:
         conn = get_connection(db_path) if db_path else get_connection()
         tag_all_untagged(conn)
     else:
