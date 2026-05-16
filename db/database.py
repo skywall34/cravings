@@ -107,6 +107,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "embedding" not in food_cols:
         conn.execute("ALTER TABLE food_items ADD COLUMN embedding BLOB")
 
+    if "recent_likes_json" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN recent_likes_json TEXT")
+
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL"
@@ -162,6 +165,43 @@ def get_food_item_by_name(conn: sqlite3.Connection, name: str, restaurant_id: in
     return dict(row) if row else None
 
 
+def get_recent_likes(conn: sqlite3.Connection, user_id: int) -> list[int]:
+    row = conn.execute(
+        "SELECT recent_likes_json FROM users WHERE id = ?", [user_id]
+    ).fetchone()
+    if row is None or not row["recent_likes_json"]:
+        return []
+    import json
+    return json.loads(row["recent_likes_json"])
+
+
+def push_recent_like(conn: sqlite3.Connection, user_id: int, item_id: int, max_len: int = 10) -> None:
+    import json
+    likes = get_recent_likes(conn, user_id)
+    if item_id in likes:
+        likes.remove(item_id)
+    likes.append(item_id)
+    if len(likes) > max_len:
+        likes = likes[-max_len:]
+    conn.execute(
+        "UPDATE users SET recent_likes_json = ? WHERE id = ?",
+        [json.dumps(likes), user_id],
+    )
+    conn.commit()
+
+
+def get_embeddings_for_items(conn: sqlite3.Connection, item_ids: list[int]) -> list[bytes]:
+    if not item_ids:
+        return []
+    placeholders = ",".join("?" * len(item_ids))
+    rows = conn.execute(
+        f"SELECT id, embedding FROM food_items WHERE id IN ({placeholders})",
+        item_ids,
+    ).fetchall()
+    id_to_emb = {r["id"]: r["embedding"] for r in rows if r["embedding"]}
+    return [id_to_emb[i] for i in item_ids if i in id_to_emb]
+
+
 def get_untagged_items(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, name, description FROM food_items WHERE tagging_status = 'pending'"
@@ -200,7 +240,7 @@ def get_eligible_food_items(
         "temperature, texture_softness, sauce_heaviness, richness, "
         "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
         "smell_intensity, nausea_trigger, "
-        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status "
+        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status, embedding "
         "FROM food_items WHERE " + " AND ".join(clauses)
     )
     rows = conn.execute(query, args).fetchall()
