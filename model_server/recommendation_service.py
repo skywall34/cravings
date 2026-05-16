@@ -11,6 +11,7 @@ import numpy as np
 from db.database import (
     get_connection, get_user_swipes_with_cuisine,
     get_recent_likes, push_recent_like, get_embeddings_for_items,
+    record_impression, get_least_impressed,
 )
 from model.features import FeatureSchema
 
@@ -73,13 +74,39 @@ class RecommendationService:
         lam = 0.0 if not liked_embeddings else (0.3 if model.total_swipes < 20 else 0.1)
         scores = _boost_with_similarity(scores, candidates, liked_embeddings, lam)
 
+        candidate_ids = [candidates[idx]["id"] for idx, _ in scores]
+
+        # Every 7th swipe after 20: force least-impressed item to front
+        chosen_id = None
+        if model.total_swipes >= 20 and model.total_swipes % 7 == 0:
+            try:
+                conn = get_connection(self.store.db_path)
+                chosen_id = get_least_impressed(conn, user_id, candidate_ids)
+                conn.close()
+            except Exception as e:
+                print(f"Warning: long-tail injection failed for user {user_id}: {e}")
+
+        if chosen_id is not None:
+            ordered_ids = [chosen_id] + [i for i in candidate_ids if i != chosen_id]
+        else:
+            ordered_ids = candidate_ids
+
+        id_to_candidate = {c["id"]: c for c in candidates}
+
+        try:
+            conn = get_connection(self.store.db_path)
+            record_impression(conn, user_id, ordered_ids[0])
+            conn.close()
+        except Exception as e:
+            print(f"Warning: record_impression failed for user {user_id}: {e}")
+
         results = []
-        for rank, (idx, score) in enumerate(scores[:top_n]):
-            item = candidates[idx]
+        for rank, item_id in enumerate(ordered_ids[:top_n]):
+            item = id_to_candidate[item_id]
             results.append({
                 "id": item["id"],
                 "name": item["name"],
-                "score": float(score),
+                "score": float(next(s for i, s in scores if candidates[i]["id"] == item_id)),
                 "rank": rank + 1,
             })
         return results

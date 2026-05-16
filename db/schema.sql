@@ -105,6 +105,14 @@ CREATE TABLE IF NOT EXISTS swipe_events (
     days_since_last_session REAL NOT NULL DEFAULT 0.0
 );
 
+CREATE TABLE IF NOT EXISTS user_item_impressions (
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    food_item_id INTEGER NOT NULL REFERENCES food_items(id),
+    count INTEGER NOT NULL DEFAULT 0,
+    last_seen TIMESTAMP,
+    PRIMARY KEY (user_id, food_item_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_food_items_restaurant ON food_items(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_food_items_tagging_status ON food_items(tagging_status);
 CREATE INDEX IF NOT EXISTS idx_food_items_safety ON food_items(safety_risk_bitmask);

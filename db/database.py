@@ -110,6 +110,16 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "recent_likes_json" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN recent_likes_json TEXT")
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS user_item_impressions ("
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  food_item_id INTEGER NOT NULL REFERENCES food_items(id),"
+        "  count INTEGER NOT NULL DEFAULT 0,"
+        "  last_seen TIMESTAMP,"
+        "  PRIMARY KEY (user_id, food_item_id)"
+        ")"
+    )
+
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL"
@@ -470,6 +480,32 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "mood_breakdown": mood_breakdown,
         "hour_breakdown": hour_breakdown,
     }
+
+
+def record_impression(conn: sqlite3.Connection, user_id: int, item_id: int) -> None:
+    conn.execute(
+        "INSERT INTO user_item_impressions (user_id, food_item_id, count, last_seen) "
+        "VALUES (?, ?, 1, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(user_id, food_item_id) DO UPDATE SET "
+        "count = count + 1, last_seen = CURRENT_TIMESTAMP",
+        [user_id, item_id],
+    )
+    conn.commit()
+
+
+def get_least_impressed(conn: sqlite3.Connection, user_id: int, candidate_ids: list[int]) -> int:
+    """Return the candidate_id with the fewest impressions for this user."""
+    import json
+    if not candidate_ids:
+        raise ValueError("candidate_ids must be non-empty")
+    row = conn.execute(
+        "SELECT c.value AS id, COALESCE(i.count, 0) AS impression_count "
+        "FROM json_each(?) c "
+        "LEFT JOIN user_item_impressions i ON i.food_item_id = c.value AND i.user_id = ? "
+        "ORDER BY impression_count ASC LIMIT 1",
+        [json.dumps(candidate_ids), user_id],
+    ).fetchone()
+    return int(row["id"])
 
 
 def get_user_swipes_with_cuisine(conn: sqlite3.Connection, user_id: int, limit: int = 5) -> list[dict]:
