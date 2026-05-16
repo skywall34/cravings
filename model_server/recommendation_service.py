@@ -6,6 +6,7 @@ The ModelServiceServicer in server.py is a thin adapter over this class.
 
 from __future__ import annotations
 
+from db.database import get_connection, get_user_swipes_with_cuisine
 from model.features import FeatureSchema
 
 
@@ -42,6 +43,16 @@ class RecommendationService:
         """Update model with swipe signal. Returns total_swipes after update."""
         model = self.store.get(user_id)
         model.record_swipe(item, context, reward)
+
+        if model.total_swipes == 5:
+            try:
+                conn = get_connection(self.store.db_path)
+                swipes = get_user_swipes_with_cuisine(conn, user_id, limit=5)
+                conn.close()
+                model.seed_cuisine_prior_from_swipes(swipes)
+            except Exception as e:
+                print(f"Warning: cuisine prior seed failed for user {user_id}: {e}")
+
         try:
             self.store.persist(user_id)
         except Exception as e:

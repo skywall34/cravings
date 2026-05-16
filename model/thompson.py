@@ -145,6 +145,32 @@ class ThompsonSamplingModel:
         self.last_decay_ts = now
         return days
 
+    def seed_cuisine_prior_from_swipes(self, swipes: list[dict]) -> None:
+        """Shift mu over cuisine dimensions based on observed like-rate from first swipes.
+
+        Trigger once at total_swipes == 5. Adds to existing mu rather than overwriting,
+        so onboarding slider signal is preserved.
+        """
+        from model.features import CONTINUOUS_ATTRS, PROTEIN_TYPES, CUISINE_TYPES
+        offset = len(CONTINUOUS_ATTRS) + len(PROTEIN_TYPES)
+
+        counts: dict[str, list[int]] = {c: [0, 0] for c in CUISINE_TYPES}
+        for s in swipes:
+            c = s.get("cuisine_type") or "other"
+            if c not in counts:
+                c = "other"
+            counts[c][1] += 1
+            if s.get("direction") == "right":
+                counts[c][0] += 1
+
+        for i, cuisine in enumerate(CUISINE_TYPES):
+            rights, total = counts[cuisine]
+            if total == 0:
+                continue
+            rate = rights / total
+            signal = (rate - 0.4) * 1.0
+            self.mu[offset + i] += signal * 0.5
+
     def set_prior_from_onboarding(self, preferences: dict) -> None:
         """Initialize prior mean from onboarding selections.
 
