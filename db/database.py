@@ -508,16 +508,6 @@ def get_least_impressed(conn: sqlite3.Connection, user_id: int, candidate_ids: l
     return int(row["id"])
 
 
-def get_user_swipes_with_cuisine(conn: sqlite3.Connection, user_id: int, limit: int = 5) -> list[dict]:
-    rows = conn.execute(
-        "SELECT se.direction, f.cuisine_type "
-        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
-        "WHERE se.user_id = ? ORDER BY se.id ASC LIMIT ?",
-        [user_id, limit],
-    ).fetchall()
-    return [dict(r) for r in rows]
-
-
 def get_items_without_embedding(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, name, description, cuisine_type, protein_type "

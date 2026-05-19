@@ -5,9 +5,35 @@ from pathlib import Path
 
 import pytest
 
-from db.database import init_db, insert_user, get_connection
+from db.database import init_db, insert_user, get_connection, record_swipe as db_record_swipe
 from model_server.model_service import ModelService, UserModelStore
 from model_server.recommendation_service import RecommendationService
+
+
+def _insert_item_with_cuisine(conn, item_id: int, cuisine: str) -> dict:
+    """Insert a tagged food item with a given cuisine_type, return item dict."""
+    conn.execute(
+        "INSERT OR IGNORE INTO food_items "
+        "(id, name, description, cuisine_type, protein_type, carb_base, "
+        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
+        "temperature, texture_softness, sauce_heaviness, richness, "
+        "veggie_density, dairy_content, smell_intensity, nausea_trigger, "
+        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status) "
+        "VALUES (?, ?, '', ?, 'chicken', 'rice', "
+        "0.5, 0.3, 0.2, 0.6, 0.4, 0.1, 0.8, 0.5, 0.6, 0.5, 0.2, 0.3, 0.4, 0.1, "
+        "0, 0, 'tagged')",
+        [item_id, f"Item_{cuisine}_{item_id}", cuisine],
+    )
+    conn.commit()
+    return {
+        "id": item_id, "name": f"Item_{cuisine}_{item_id}",
+        "cuisine_type": cuisine, "protein_type": "chicken", "carb_base": "rice",
+        "spice_level": 0.5, "sweetness": 0.3, "sourness": 0.2, "savory_umami": 0.6,
+        "saltiness": 0.4, "bitterness": 0.1, "temperature": 0.8,
+        "texture_softness": 0.5, "sauce_heaviness": 0.6, "richness": 0.5,
+        "veggie_density": 0.2, "dairy_content": 0.3, "smell_intensity": 0.4,
+        "nausea_trigger": 0.1, "embedding": None,
+    }
 
 
 def make_item_dict(**kwargs) -> dict:
@@ -153,3 +179,66 @@ class TestModelService:
 
         assert svc.get_status(uid1)["total_swipes"] == 3
         assert svc.get_status(uid2)["total_swipes"] == 1
+
+
+class TestStratifiedColdStart:
+    """Stratified cuisine rotation for cold-start users."""
+
+    CUISINES = ["american", "korean", "italian", "japanese", "mexican"]
+
+    @pytest.fixture
+    def setup(self):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = Path(f.name)
+        conn = init_db(db_path)
+        uid, _ = insert_user(conn, "colduser")
+        items = [_insert_item_with_cuisine(conn, i + 1, c) for i, c in enumerate(self.CUISINES)]
+        conn.close()
+        svc = RecommendationService(UserModelStore(db_path))
+        yield db_path, uid, items, svc
+        db_path.unlink(missing_ok=True)
+
+    def test_cold_start_returns_distinct_cuisines(self, setup):
+        _, uid, items, svc = setup
+        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        results = svc.recommend(uid, items, ctx, top_n=3)
+        assert len(results) == 3
+        cuisines = [next(it["cuisine_type"] for it in items if it["id"] == r["id"]) for r in results]
+        assert len(set(cuisines)) == 3, "all 3 slots must be distinct cuisines"
+        assert "other" not in cuisines
+
+    def test_cold_start_excludes_other_cuisine(self, setup):
+        db_path, uid, items, svc = setup
+        conn = get_connection(db_path)
+        fusion_item = _insert_item_with_cuisine(conn, 99, "other")
+        conn.close()
+        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        results = svc.recommend(uid, items + [fusion_item], ctx, top_n=3)
+        result_ids = {r["id"] for r in results}
+        assert 99 not in result_ids, "other-cuisine item must not appear in stratified phase"
+
+    def test_stratified_ends_after_all_cuisines_swiped(self, setup):
+        db_path, uid, items, svc = setup
+        conn = get_connection(db_path)
+        # Record one swipe per cuisine to mark all cuisines as seen
+        for item in items:
+            db_record_swipe(conn, uid, item["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+        conn.close()
+
+        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        # Should now use normal Thompson path (all cuisines covered → unseen_cuisines empty)
+        results = svc.recommend(uid, items, ctx, top_n=1)
+        assert len(results) == 1
+
+    def test_stratified_skips_already_swiped_cuisines(self, setup):
+        db_path, uid, items, svc = setup
+        conn = get_connection(db_path)
+        # Swipe on the first item (american)
+        db_record_swipe(conn, uid, items[0]["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+        conn.close()
+
+        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        results = svc.recommend(uid, items, ctx, top_n=3)
+        result_item_ids = {r["id"] for r in results}
+        # american item should not appear (already swiped, american = covered)
+        assert items[0]["id"] not in result_item_ids, "already-covered cuisine must not appear"
