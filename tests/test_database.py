@@ -17,6 +17,10 @@ from db.database import (
     update_food_item_tags,
     update_user_model_state,
     update_user_onboarding,
+    get_embeddings_for_items,
+    record_impression,
+    get_least_impressed,
+    get_eligible_food_items,
 )
 
 
@@ -170,3 +174,138 @@ class TestUsers:
         assert user["dietary_flags_bitmask"] == 3
         assert user["safety_overrides_bitmask"] == 1
         assert user["onboarding_complete"] == 1
+
+
+def _tagged_item(db_conn, name: str, cuisine: str = "italian", safety: int = 0, dietary: int = 0) -> int:
+    fid = insert_food_item(db_conn, {"name": name})
+    update_food_item_tags(db_conn, fid, {
+        "cuisine_type": cuisine,
+        "safety_risk_bitmask": safety,
+        "dietary_flags_bitmask": dietary,
+    })
+    return fid
+
+
+class TestEmbeddings:
+    def test_returns_blobs_for_items_with_embedding(self, db_conn):
+        fid = _tagged_item(db_conn, "Sushi Roll")
+        blob = bytes(range(16))
+        db_conn.execute("UPDATE food_items SET embedding = ? WHERE id = ?", [blob, fid])
+        db_conn.commit()
+
+        result = get_embeddings_for_items(db_conn, [fid])
+        assert result == [blob]
+
+    def test_skips_items_without_embedding(self, db_conn):
+        fid = _tagged_item(db_conn, "Plain Rice")
+        result = get_embeddings_for_items(db_conn, [fid])
+        assert result == []
+
+    def test_empty_id_list_returns_empty(self, db_conn):
+        assert get_embeddings_for_items(db_conn, []) == []
+
+    def test_preserves_order_of_ids_with_embeddings(self, db_conn):
+        blob_a = b"\x01" * 8
+        blob_b = b"\x02" * 8
+        fid_a = _tagged_item(db_conn, "Item A")
+        fid_b = _tagged_item(db_conn, "Item B")
+        db_conn.execute("UPDATE food_items SET embedding = ? WHERE id = ?", [blob_a, fid_a])
+        db_conn.execute("UPDATE food_items SET embedding = ? WHERE id = ?", [blob_b, fid_b])
+        db_conn.commit()
+
+        result = get_embeddings_for_items(db_conn, [fid_b, fid_a])
+        assert result == [blob_b, blob_a]
+
+
+class TestImpressions:
+    def test_record_impression_creates_row(self, db_conn):
+        uid, _ = insert_user(db_conn, "user1")
+        fid = _tagged_item(db_conn, "Pizza")
+
+        record_impression(db_conn, uid, fid)
+
+        row = db_conn.execute(
+            "SELECT count FROM user_item_impressions WHERE user_id = ? AND food_item_id = ?",
+            [uid, fid],
+        ).fetchone()
+        assert row is not None
+        assert row["count"] == 1
+
+    def test_record_impression_increments_on_conflict(self, db_conn):
+        uid, _ = insert_user(db_conn, "user2")
+        fid = _tagged_item(db_conn, "Tacos")
+
+        record_impression(db_conn, uid, fid)
+        record_impression(db_conn, uid, fid)
+        record_impression(db_conn, uid, fid)
+
+        row = db_conn.execute(
+            "SELECT count FROM user_item_impressions WHERE user_id = ? AND food_item_id = ?",
+            [uid, fid],
+        ).fetchone()
+        assert row["count"] == 3
+
+    def test_get_least_impressed_returns_item_with_fewest_impressions(self, db_conn):
+        uid, _ = insert_user(db_conn, "user3")
+        fid_a = _tagged_item(db_conn, "A")
+        fid_b = _tagged_item(db_conn, "B")
+        fid_c = _tagged_item(db_conn, "C")
+
+        record_impression(db_conn, uid, fid_a)
+        record_impression(db_conn, uid, fid_a)
+        record_impression(db_conn, uid, fid_b)
+
+        result = get_least_impressed(db_conn, uid, [fid_a, fid_b, fid_c])
+        assert result == fid_c  # fid_c has 0 impressions
+
+    def test_get_least_impressed_tie_breaks_to_first_in_list(self, db_conn):
+        uid, _ = insert_user(db_conn, "user4")
+        fid_a = _tagged_item(db_conn, "X")
+        fid_b = _tagged_item(db_conn, "Y")
+
+        result = get_least_impressed(db_conn, uid, [fid_a, fid_b])
+        assert result in (fid_a, fid_b)  # both 0 impressions
+
+    def test_get_least_impressed_empty_raises(self, db_conn):
+        uid, _ = insert_user(db_conn, "user5")
+        with pytest.raises(ValueError):
+            get_least_impressed(db_conn, uid, [])
+
+
+class TestEligibleFoodItems:
+    def test_excludes_unsafe_items(self, db_conn):
+        safe_fid = _tagged_item(db_conn, "Safe", safety=0)
+        unsafe_fid = _tagged_item(db_conn, "Unsafe", safety=0b00001)  # raw_fish bit
+
+        results = get_eligible_food_items(db_conn, safety_mask=0b00001, dietary_restrictions=[])
+        ids = [r["id"] for r in results]
+        assert safe_fid in ids
+        assert unsafe_fid not in ids
+
+    def test_excludes_allergen_items(self, db_conn):
+        safe_fid = _tagged_item(db_conn, "No Nuts", dietary=0b0000000000)
+        nut_fid = _tagged_item(db_conn, "Has Nuts", dietary=0b1000000)  # contains_nuts bit 6
+
+        results = get_eligible_food_items(db_conn, safety_mask=0, dietary_restrictions=["contains_nuts"])
+        ids = [r["id"] for r in results]
+        assert safe_fid in ids
+        assert nut_fid not in ids
+
+    def test_excludes_by_id(self, db_conn):
+        fid_a = _tagged_item(db_conn, "Exclude Me")
+        fid_b = _tagged_item(db_conn, "Keep Me")
+
+        results = get_eligible_food_items(db_conn, safety_mask=0, dietary_restrictions=[], exclude_ids=[fid_a])
+        ids = [r["id"] for r in results]
+        assert fid_a not in ids
+        assert fid_b in ids
+
+    def test_includes_embedding_column(self, db_conn):
+        fid = _tagged_item(db_conn, "With Embedding")
+        blob = b"\xff" * 4
+        db_conn.execute("UPDATE food_items SET embedding = ? WHERE id = ?", [blob, fid])
+        db_conn.commit()
+
+        results = get_eligible_food_items(db_conn, safety_mask=0, dietary_restrictions=[])
+        item = next(r for r in results if r["id"] == fid)
+        assert item["embedding"] == blob

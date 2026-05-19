@@ -6,15 +6,18 @@ The ModelServiceServicer in server.py is a thin adapter over this class.
 
 from __future__ import annotations
 
+import logging
 import random
 
 import numpy as np
 
 from db.database import (
-    get_connection, get_recent_likes, push_recent_like, get_embeddings_for_items,
+    db_connection, get_recent_likes, push_recent_like, get_embeddings_for_items,
     record_impression, get_least_impressed,
 )
 from model.features import FeatureSchema
+
+logger = logging.getLogger(__name__)
 
 
 def _boost_with_similarity(
@@ -48,32 +51,28 @@ class RecommendationService:
     def _get_liked_embeddings(self, user_id: int, model) -> tuple[list[np.ndarray], float]:
         liked_embeddings: list[np.ndarray] = []
         try:
-            conn = get_connection(self.store.db_path)
-            like_ids = get_recent_likes(conn, user_id)
-            conn.close()
-            if like_ids:
-                conn = get_connection(self.store.db_path)
-                blobs = get_embeddings_for_items(conn, like_ids)
-                conn.close()
-                liked_embeddings = [np.frombuffer(b, dtype=np.float32) for b in blobs]
+            with db_connection(self.store.db_path) as conn:
+                like_ids = get_recent_likes(conn, user_id)
+                if like_ids:
+                    blobs = get_embeddings_for_items(conn, like_ids)
+                    liked_embeddings = [np.frombuffer(b, dtype=np.float32) for b in blobs]
         except Exception as e:
-            print(f"Warning: failed to load liked embeddings for user {user_id}: {e}")
+            logger.warning("failed to load liked embeddings for user %d: %s", user_id, e)
         lam = 0.0 if not liked_embeddings else (0.3 if model.total_swipes < 20 else 0.1)
         return liked_embeddings, lam
 
     def _get_swiped_cuisines(self, user_id: int) -> set[str]:
         """Return set of cuisine_types the user has swiped on (excludes 'other')."""
         try:
-            conn = get_connection(self.store.db_path)
-            rows = conn.execute(
-                "SELECT DISTINCT f.cuisine_type FROM swipe_events se "
-                "JOIN food_items f ON se.food_item_id = f.id WHERE se.user_id = ?",
-                [user_id],
-            ).fetchall()
-            conn.close()
+            with db_connection(self.store.db_path) as conn:
+                rows = conn.execute(
+                    "SELECT DISTINCT f.cuisine_type FROM swipe_events se "
+                    "JOIN food_items f ON se.food_item_id = f.id WHERE se.user_id = ?",
+                    [user_id],
+                ).fetchall()
             return {r[0] for r in rows if r[0] and r[0] != "other"}
         except Exception as e:
-            print(f"Warning: get_swiped_cuisines failed: {e}")
+            logger.warning("get_swiped_cuisines failed: %s", e)
             return set()
 
     def recommend(
@@ -166,11 +165,10 @@ class RecommendationService:
 
         if results:
             try:
-                conn = get_connection(self.store.db_path)
-                record_impression(conn, user_id, results[0]["id"])
-                conn.close()
+                with db_connection(self.store.db_path) as conn:
+                    record_impression(conn, user_id, results[0]["id"])
             except Exception as e:
-                print(f"Warning: record_impression failed for user {user_id}: {e}")
+                logger.warning("record_impression failed for user %d: %s", user_id, e)
 
         return results
 
@@ -197,11 +195,10 @@ class RecommendationService:
         chosen_id = None
         if model.total_swipes >= 20 and model.total_swipes % 7 == 0:
             try:
-                conn = get_connection(self.store.db_path)
-                chosen_id = get_least_impressed(conn, user_id, candidate_ids)
-                conn.close()
+                with db_connection(self.store.db_path) as conn:
+                    chosen_id = get_least_impressed(conn, user_id, candidate_ids)
             except Exception as e:
-                print(f"Warning: long-tail injection failed for user {user_id}: {e}")
+                logger.warning("long-tail injection failed for user %d: %s", user_id, e)
 
         if chosen_id is not None:
             ordered_ids = [chosen_id] + [i for i in candidate_ids if i != chosen_id]
@@ -211,11 +208,10 @@ class RecommendationService:
         id_to_candidate = {c["id"]: c for c in candidates}
 
         try:
-            conn = get_connection(self.store.db_path)
-            record_impression(conn, user_id, ordered_ids[0])
-            conn.close()
+            with db_connection(self.store.db_path) as conn:
+                record_impression(conn, user_id, ordered_ids[0])
         except Exception as e:
-            print(f"Warning: record_impression failed for user {user_id}: {e}")
+            logger.warning("record_impression failed for user %d: %s", user_id, e)
 
         results = []
         for rank, item_id in enumerate(ordered_ids[:top_n]):
@@ -235,16 +231,15 @@ class RecommendationService:
 
         if reward == 1:
             try:
-                conn = get_connection(self.store.db_path)
-                push_recent_like(conn, user_id, item["id"])
-                conn.close()
+                with db_connection(self.store.db_path) as conn:
+                    push_recent_like(conn, user_id, item["id"])
             except Exception as e:
-                print(f"Warning: push_recent_like failed for user {user_id}: {e}")
+                logger.warning("push_recent_like failed for user %d: %s", user_id, e)
 
         try:
             self.store.persist(user_id)
         except Exception as e:
-            print(f"Warning: failed to persist user {user_id} model: {e}")
+            logger.warning("failed to persist user %d model: %s", user_id, e)
         return model.total_swipes
 
     def get_status(self, user_id: int) -> dict:

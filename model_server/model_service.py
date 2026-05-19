@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from db.database import get_connection, get_user, update_user_model_state, DEFAULT_DB_PATH
+from db.database import db_connection, get_user, update_user_model_state, DEFAULT_DB_PATH
 from model.features import FeatureSchema
 from model.thompson import ThompsonSamplingModel, ModelConfig
 from model_server.recommendation_service import RecommendationService
@@ -48,8 +48,7 @@ class UserModelStore:
             return model
 
     def _load_or_create(self, user_id: int) -> ThompsonSamplingModel:
-        conn = get_connection(self.db_path)
-        try:
+        with db_connection(self.db_path) as conn:
             user = get_user(conn, user_id)
             if user is None:
                 raise ValueError(f"user_id {user_id} not found")
@@ -61,16 +60,13 @@ class UserModelStore:
                 model.last_decay_ts = user["last_decay_ts"] or model.last_decay_ts
                 model._drift_active = bool(user["drift_active"])
                 FeatureSchema().validate_model(model)
-        finally:
-            conn.close()
         return model
 
     def persist(self, user_id: int) -> None:
         model = self._cache.get(user_id)
         if model is None:
             return
-        conn = get_connection(self.db_path)
-        try:
+        with db_connection(self.db_path) as conn:
             update_user_model_state(
                 conn, user_id,
                 _serialize_array(model.mu),
@@ -79,8 +75,6 @@ class UserModelStore:
                 model.last_decay_ts,
                 model._drift_active,
             )
-        finally:
-            conn.close()
 
 
 class ModelService:

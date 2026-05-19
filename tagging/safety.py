@@ -70,3 +70,24 @@ def user_safety_mask(safety_overrides_bitmask: int) -> int:
     return _ALL_SAFETY_BITS & ~safety_overrides_bitmask
 
 
+def build_dietary_filter_clauses(dietary_restrictions: list[str]) -> tuple[list[str], list[int]]:
+    """Return (WHERE clauses, bind args) for dietary restriction filtering.
+
+    contains_* flags: item must NOT have the bit (allergen exclusion).
+    All other flags: item MUST have the bit (positive certification).
+    """
+    clauses: list[str] = []
+    args: list[int] = []
+    for r in (dietary_restrictions or []):
+        bit = DIETARY_FLAGS.get(r)
+        if bit is None:
+            continue
+        mask = 1 << bit
+        if r.startswith("contains_"):
+            clauses.append("(dietary_flags_bitmask & ?) = 0")
+        else:
+            clauses.append("(dietary_flags_bitmask & ?) != 0")
+        args.append(mask)
+    return clauses, args
+
+

@@ -2,11 +2,23 @@
 
 import secrets
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Generator
 
 import bcrypt as _bcrypt
 
-from tagging.safety import DIETARY_FLAGS, SAFETY_FLAGS
+from tagging.safety import SAFETY_FLAGS, build_dietary_filter_clauses
+
+_FOOD_ITEM_COLS = (
+    "id, name, description, restaurant_id, "
+    "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
+    "temperature, texture_softness, sauce_heaviness, richness, "
+    "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
+    "smell_intensity, nausea_trigger, "
+    "safety_risk_bitmask, dietary_flags_bitmask, tagging_status"
+)
+_FOOD_ITEM_COLS_WITH_EMBEDDING = _FOOD_ITEM_COLS + ", embedding"
 
 SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 DEFAULT_DB_PATH = Path(__file__).parent.parent / "cravings.db"
@@ -74,6 +86,15 @@ def get_connection(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
+
+
+@contextmanager
+def db_connection(db_path: Path = DEFAULT_DB_PATH) -> Generator[sqlite3.Connection, None, None]:
+    conn = get_connection(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def init_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
@@ -228,16 +249,9 @@ def get_eligible_food_items(
     clauses = ["tagging_status = 'tagged'", "(safety_risk_bitmask & ?) = 0"]
     args: list = [safety_mask]
 
-    for r in (dietary_restrictions or []):
-        bit = DIETARY_FLAGS.get(r)
-        if bit is None:
-            continue
-        mask = 1 << bit
-        if r.startswith("contains_"):
-            clauses.append("(dietary_flags_bitmask & ?) = 0")
-        else:
-            clauses.append("(dietary_flags_bitmask & ?) != 0")
-        args.append(mask)
+    diet_clauses, diet_args = build_dietary_filter_clauses(dietary_restrictions)
+    clauses.extend(diet_clauses)
+    args.extend(diet_args)
 
     if exclude_ids:
         placeholders = ",".join("?" * len(exclude_ids))
@@ -245,12 +259,7 @@ def get_eligible_food_items(
         args.extend(exclude_ids)
 
     query = (
-        "SELECT id, name, description, restaurant_id, "
-        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
-        "temperature, texture_softness, sauce_heaviness, richness, "
-        "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
-        "smell_intensity, nausea_trigger, "
-        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status, embedding "
+        f"SELECT {_FOOD_ITEM_COLS_WITH_EMBEDDING} "
         "FROM food_items WHERE " + " AND ".join(clauses)
     )
     rows = conn.execute(query, args).fetchall()
@@ -259,13 +268,7 @@ def get_eligible_food_items(
 
 def get_food_item(conn: sqlite3.Connection, item_id: int) -> dict | None:
     row = conn.execute(
-        "SELECT id, name, description, restaurant_id, "
-        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
-        "temperature, texture_softness, sauce_heaviness, richness, "
-        "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
-        "smell_intensity, nausea_trigger, "
-        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status "
-        "FROM food_items WHERE id = ?",
+        f"SELECT {_FOOD_ITEM_COLS} FROM food_items WHERE id = ?",
         [item_id],
     ).fetchone()
     return dict(row) if row else None
@@ -273,13 +276,7 @@ def get_food_item(conn: sqlite3.Connection, item_id: int) -> dict | None:
 
 def list_food_items(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, name, description, restaurant_id, "
-        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
-        "temperature, texture_softness, sauce_heaviness, richness, "
-        "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
-        "smell_intensity, nausea_trigger, "
-        "safety_risk_bitmask, dietary_flags_bitmask, tagging_status "
-        "FROM food_items WHERE tagging_status = 'tagged'"
+        f"SELECT {_FOOD_ITEM_COLS} FROM food_items WHERE tagging_status = 'tagged'"
     ).fetchall()
     return [dict(r) for r in rows]
 
