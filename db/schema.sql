@@ -84,6 +84,14 @@ CREATE TABLE IF NOT EXISTS food_items (
     --   4=halal, 5=kosher, 6=contains_nuts, 7=contains_shellfish, 8=contains_soy, 9=contains_eggs
     dietary_flags_bitmask INTEGER NOT NULL DEFAULT 0,
 
+    -- Image
+    image_slug TEXT,
+    image_hash TEXT,
+    image_author TEXT,
+    image_license TEXT,
+    image_source_url TEXT,
+    image_review_status TEXT NOT NULL DEFAULT 'auto',  -- auto | needs_review | approved
+
     -- Metadata
     tagging_status TEXT NOT NULL DEFAULT 'pending',  -- pending | tagged | failed
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

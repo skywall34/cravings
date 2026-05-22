@@ -16,7 +16,8 @@ _FOOD_ITEM_COLS = (
     "temperature, texture_softness, sauce_heaviness, richness, "
     "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
     "smell_intensity, nausea_trigger, "
-    "safety_risk_bitmask, dietary_flags_bitmask, tagging_status"
+    "safety_risk_bitmask, dietary_flags_bitmask, tagging_status, "
+    "image_slug, image_hash, image_author, image_license, image_source_url, image_review_status"
 )
 _FOOD_ITEM_COLS_WITH_EMBEDDING = _FOOD_ITEM_COLS + ", embedding"
 
@@ -127,6 +128,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     food_cols = {r["name"] for r in conn.execute("PRAGMA table_info(food_items)").fetchall()}
     if "embedding" not in food_cols:
         conn.execute("ALTER TABLE food_items ADD COLUMN embedding BLOB")
+    if "image_slug" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_slug TEXT")
+    if "image_hash" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_hash TEXT")
+    if "image_author" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_author TEXT")
+    if "image_license" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_license TEXT")
+    if "image_source_url" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_source_url TEXT")
+    if "image_review_status" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_review_status TEXT NOT NULL DEFAULT 'auto'")
 
     if "recent_likes_json" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN recent_likes_json TEXT")
@@ -509,6 +522,34 @@ def get_items_without_embedding(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, name, description, cuisine_type, protein_type "
         "FROM food_items WHERE tagging_status = 'tagged' AND embedding IS NULL"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_food_item_image(
+    conn: sqlite3.Connection,
+    item_id: int,
+    image_slug: str,
+    image_hash: str,
+    image_author: str,
+    image_license: str,
+    image_source_url: str,
+    image_review_status: str = "auto",
+) -> None:
+    conn.execute(
+        "UPDATE food_items SET image_slug = ?, image_hash = ?, image_author = ?, "
+        "image_license = ?, image_source_url = ?, image_review_status = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [image_slug, image_hash, image_author, image_license, image_source_url,
+         image_review_status, item_id],
+    )
+    conn.commit()
+
+
+def get_items_without_image(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, name, cuisine_type FROM food_items "
+        "WHERE tagging_status = 'tagged' AND image_slug IS NULL"
     ).fetchall()
     return [dict(r) for r in rows]
 

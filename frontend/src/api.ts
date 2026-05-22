@@ -26,6 +26,11 @@ export interface FoodItem {
   dairy_content: number
   protein_type?: string
   snapshot_token: string
+  image_url_400?: string | null
+  image_url_800?: string | null
+  image_author?: string | null
+  image_license?: string | null
+  image_source_url?: string | null
 }
 
 export interface Restaurant {

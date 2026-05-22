@@ -120,11 +120,50 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
       }}>
 
         {/* Food visual */}
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '36px 24px 24px' }}>
-          <span style={{ fontSize: 96, lineHeight: 1, filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.12))' }}>
-            {emoji}
-          </span>
-        </div>
+        {food.image_url_400 ? (
+          <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', overflow: 'hidden' }}>
+            <img
+              srcSet={food.image_url_800 ? `${food.image_url_400} 400w, ${food.image_url_800} 800w` : food.image_url_400}
+              sizes="(max-width: 480px) 400px, 800px"
+              src={food.image_url_400}
+              alt={food.name}
+              style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+              loading="lazy"
+            />
+            {food.image_author && (
+              <a
+                href={food.image_source_url ?? undefined}
+                target="_blank"
+                rel="noreferrer"
+                style={{
+                  position: 'absolute', bottom: 0, left: 0, right: 0,
+                  background: 'rgba(0,0,0,0.45)', color: 'rgba(255,255,255,0.85)',
+                  fontSize: '0.65rem', padding: '4px 8px', textDecoration: 'none',
+                  display: 'block', lineHeight: 1.4,
+                }}
+              >
+                Photo: {food.image_author} · {food.image_license}
+              </a>
+            )}
+          </div>
+        ) : (
+          <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', overflow: 'hidden', background: bgColor }}>
+            {food.cuisine_type && (
+              <img
+                src={`/images/cuisines/${food.cuisine_type.toLowerCase()}.webp`}
+                alt={food.cuisine_type}
+                style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                loading="lazy"
+                onError={e => { e.currentTarget.style.display = 'none' }}
+              />
+            )}
+            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <span style={{ fontSize: 96, lineHeight: 1, filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.12))' }}>
+                {emoji}
+              </span>
+            </div>
+          </div>
+        )}
 
         {/* Food info */}
         <div style={{ padding: '0 28px 20px', display: 'flex', flexDirection: 'column', gap: 10 }}>

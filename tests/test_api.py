@@ -485,3 +485,81 @@ async def test_admin_batch_empty_body(admin_client, monkeypatch):
     data = resp.json()
     assert data["restaurants_inserted"] == 0
     assert data["food_items_inserted"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Image fields in recommend and food-item endpoints
+# ---------------------------------------------------------------------------
+
+def _insert_food_item_with_image(db_path: str, name: str = "Carbonara") -> int:
+    """Insert a tagged item that has image fields set."""
+    import sqlite3
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.execute(
+        "INSERT INTO food_items (name, description, tagging_status, "
+        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
+        "temperature, texture_softness, sauce_heaviness, richness, "
+        "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
+        "smell_intensity, nausea_trigger, safety_risk_bitmask, dietary_flags_bitmask, "
+        "image_slug, image_hash, image_author, image_license, image_source_url, image_review_status) "
+        "VALUES (?, 'A pasta dish', 'tagged', "
+        "0.1, 0.2, 0.1, 0.8, 0.5, 0.1, "
+        "0.7, 0.6, 0.7, 0.9, "
+        "'pork', 'italian', 'noodles_pasta', 0.1, 0.5, "
+        "0.4, 0.0, 0, 0, "
+        "'carbonara', 'abc12345', 'Test Author', 'CC-BY-SA-4.0', "
+        "'https://commons.wikimedia.org/wiki/File:Carbonara.jpg', 'auto')",
+        [name],
+    )
+    item_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    return item_id
+
+
+async def test_recommend_includes_image_url_for_item_with_image(auth_client):
+    client, _, _ = auth_client
+    _insert_food_item_with_image(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=img1")
+    assert resp.status_code == 200
+    item = resp.json()[0]
+    assert "image_url_400" in item
+    assert "image_url_800" in item
+    assert item["image_url_400"] is not None
+    assert "carbonara-abc12345-400.webp" in item["image_url_400"]
+
+
+async def test_recommend_returns_null_image_url_for_no_image_item(auth_client):
+    client, _, _ = auth_client
+    _insert_food_item(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=img2")
+    assert resp.status_code == 200
+    item = resp.json()[0]
+    assert item.get("image_url_400") is None
+    assert item.get("image_url_800") is None
+
+
+async def test_recommend_returns_null_url_for_needs_review(auth_client):
+    client, _, _ = auth_client
+    import sqlite3
+    conn = sqlite3.connect(TEST_DB)
+    cursor = conn.execute(
+        "INSERT INTO food_items (name, tagging_status, spice_level, sweetness, sourness, "
+        "savory_umami, saltiness, bitterness, temperature, texture_softness, sauce_heaviness, "
+        "richness, protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
+        "smell_intensity, nausea_trigger, safety_risk_bitmask, dietary_flags_bitmask, "
+        "image_slug, image_hash, image_review_status) VALUES "
+        "('Mystery Dish', 'tagged', 0.5, 0.2, 0.1, 0.7, 0.4, 0.1, 0.6, 0.5, 0.5, 0.6, "
+        "'chicken', 'japanese', 'rice', 0.2, 0.1, 0.3, 0.0, 0, 0, "
+        "'mystery', 'abc99999', 'needs_review')"
+    )
+    conn.commit()
+    conn.close()
+
+    resp = await client.get("/api/recommend?session_id=img3")
+    assert resp.status_code == 200
+    item = resp.json()[0]
+    # needs_review images are now served (manual review is optional, not a gate)
+    assert item.get("image_url_400") is not None
+    assert "mystery" in item["image_url_400"]

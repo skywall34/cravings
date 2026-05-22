@@ -45,6 +45,57 @@ class TestInitDB:
         assert "swipe_events" in table_names
         assert "users" in table_names
 
+    def test_image_columns_exist_on_fresh_db(self, db_conn):
+        cols = {r["name"] for r in db_conn.execute("PRAGMA table_info(food_items)").fetchall()}
+        for col in ("image_slug", "image_hash", "image_author", "image_license",
+                    "image_source_url", "image_review_status"):
+            assert col in cols, f"missing column: {col}"
+
+    def test_migration_adds_image_columns_to_existing_db(self):
+        import sqlite3
+        import tempfile
+        from pathlib import Path
+        from db.database import SCHEMA_PATH, _migrate
+
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as f:
+            db_path = Path(f.name)
+
+        conn = sqlite3.connect(str(db_path))
+        conn.row_factory = sqlite3.Row
+        # Create table without image columns (simulate old schema)
+        conn.executescript(
+            "CREATE TABLE food_items ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  name TEXT NOT NULL,"
+            "  tagging_status TEXT NOT NULL DEFAULT 'pending'"
+            ");"
+            "CREATE TABLE users ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  name TEXT NOT NULL,"
+            "  api_token TEXT NOT NULL UNIQUE,"
+            "  dietary_flags_bitmask INTEGER NOT NULL DEFAULT 0,"
+            "  safety_overrides_bitmask INTEGER NOT NULL DEFAULT 0,"
+            "  total_swipes INTEGER NOT NULL DEFAULT 0,"
+            "  drift_active INTEGER NOT NULL DEFAULT 0,"
+            "  onboarding_complete INTEGER NOT NULL DEFAULT 0"
+            ");"
+            "CREATE TABLE swipe_events ("
+            "  id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            "  user_id INTEGER NOT NULL,"
+            "  food_item_id INTEGER NOT NULL,"
+            "  direction TEXT NOT NULL"
+            ");"
+        )
+        _migrate(conn)
+
+        cols = {r["name"] for r in conn.execute("PRAGMA table_info(food_items)").fetchall()}
+        for col in ("image_slug", "image_hash", "image_author", "image_license",
+                    "image_source_url", "image_review_status"):
+            assert col in cols, f"migration missing column: {col}"
+
+        conn.close()
+        db_path.unlink(missing_ok=True)
+
     def test_creates_indexes(self, db_conn):
         indexes = db_conn.execute(
             "SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%'"

@@ -20,3 +20,11 @@ frontend/node_modules/
 frontend/dist/
 
 .env
+# Food images (shipped via rsync, not git)
+images/food/*
+images/cuisines/*
+images/manual/
+images/missing.csv
+# Re-include .gitkeep stubs so directory structure is preserved in repo
+!images/food/.gitkeep
+!images/cuisines/.gitkeep

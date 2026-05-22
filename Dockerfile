@@ -12,5 +12,7 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --frozen --no-dev
 COPY . .
 COPY --from=frontend /app/frontend/dist ./frontend/dist
+RUN mkdir -p /app/images/food /app/images/cuisines
+ENV CRAVINGS_IMAGES_ROOT=/app/images
 EXPOSE 8080
 CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]

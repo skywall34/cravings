@@ -8,7 +8,7 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
-from fastapi import Depends, FastAPI, HTTPException, Query, status
+from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security.http import HTTPBearer as _OptionalBearer
 from fastapi.staticfiles import StaticFiles
@@ -33,16 +33,19 @@ _model_service: ModelService | None = None
 _places: PlacesAdapter = PlacesAdapter()
 _sessions: swipe.SessionStore = swipe.SessionStore()
 _session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
+_images_root: Path = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db_path, _model_service, _places, _sessions
+    global _db_path, _model_service, _places, _sessions, _images_root
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
+    _images_root = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
     db.init_db(_db_path)
     _model_service = ModelService(_db_path)
     _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""))
     _sessions = swipe.SessionStore()
+
     yield
 
 
@@ -51,6 +54,14 @@ _base_path = os.environ.get("BASE_PATH", "")
 app = FastAPI(lifespan=lifespan, root_path=_base_path)
 _bearer = HTTPBearer()
 _optional_bearer = HTTPBearer(auto_error=False)
+
+
+@app.middleware("http")
+async def _image_cache_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    if request.url.path.startswith("/images/"):
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
 
 
 # ---------------------------------------------------------------------------
@@ -158,9 +169,29 @@ async def recommend(
     if not results:
         raise HTTPException(status_code=404, detail="no eligible food items")
 
+    id_to_candidate = {c["id"]: c for c in candidates}
     token = swipe.seal(snapshot)
     for r in results:
         r["snapshot_token"] = token
+        candidate = id_to_candidate.get(r["id"], {})
+        r.update({
+            "description": candidate.get("description"),
+            "cuisine_type": candidate.get("cuisine_type"),
+            "spice_level": candidate.get("spice_level"),
+            "sweetness": candidate.get("sweetness"),
+            "richness": candidate.get("richness"),
+            "sauce_heaviness": candidate.get("sauce_heaviness"),
+            "veggie_density": candidate.get("veggie_density"),
+            "dairy_content": candidate.get("dairy_content"),
+            "protein_type": candidate.get("protein_type"),
+            "image_slug": candidate.get("image_slug"),
+            "image_hash": candidate.get("image_hash"),
+            "image_author": candidate.get("image_author"),
+            "image_license": candidate.get("image_license"),
+            "image_source_url": candidate.get("image_source_url"),
+            "image_review_status": candidate.get("image_review_status", "auto"),
+        })
+        _build_image_urls(r)
     return results
 
 
@@ -209,7 +240,7 @@ async def get_food_item(item_id: int, conn=Depends(_get_conn), user=Depends(_get
     item = db.get_food_item(conn, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
-    return item
+    return _build_image_urls(item)
 
 
 @app.get("/api/restaurants")
@@ -410,8 +441,32 @@ async def admin_batch(body: dict):
 
 
 # ---------------------------------------------------------------------------
-# Static files (SPA) — must be mounted after all API routes
+# Image URL helper
 # ---------------------------------------------------------------------------
+
+def _build_image_urls(item: dict) -> dict:
+    """Add image_url_400, image_url_800 fields to a food item dict."""
+    slug = item.get("image_slug")
+    hash_ = item.get("image_hash")
+    status = item.get("image_review_status", "auto")
+    if slug and hash_ and status in ("auto", "approved", "needs_review"):
+        base = f"{_base_path}/images/food/{slug}-{hash_}"
+        item["image_url_400"] = f"{base}-400.webp"
+        item["image_url_800"] = f"{base}-800.webp"
+    else:
+        item["image_url_400"] = None
+        item["image_url_800"] = None
+    return item
+
+
+# ---------------------------------------------------------------------------
+# Static files (images + SPA) — must be mounted after all API routes
+# ---------------------------------------------------------------------------
+
+# Images: mount at module load time. CRAVINGS_IMAGES_ROOT must be set before import.
+_images_dir = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
+if _images_dir.is_dir():
+    app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
 
 _dist = Path("frontend/dist")
 if _dist.is_dir():
