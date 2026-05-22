@@ -2,9 +2,14 @@
 
 import asyncio
 import logging
+import mimetypes
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
+
+# python:3.12-slim ships without /etc/mime.types — register webp explicitly
+# so StaticFiles serves food images as image/webp, not text/plain.
+mimetypes.add_type("image/webp", ".webp")
 
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
@@ -59,7 +64,9 @@ _optional_bearer = HTTPBearer(auto_error=False)
 @app.middleware("http")
 async def _image_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
-    if request.url.path.startswith("/images/"):
+    # Match regardless of mount prefix — request.url.path includes root_path
+    # (e.g. /cravings/images/...) since the proxy forwards the full path.
+    if "/images/" in request.url.path:
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
     return response
 
