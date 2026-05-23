@@ -81,6 +81,48 @@ section "Embedding / recent_likes (DB check on VPS)"
 echo "  Run on VPS to verify recent_likes_json and embedding column:"
 echo "  docker compose exec cravings uv run python /app/scripts/embed_items.py --validate"
 
+# ── 8. Images ─────────────────────────────────────────────────────────────────
+section "Images"
+
+# 8a. Cuisine placeholders — spot-check a few
+for cuisine in american korean indian thai other; do
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/images/cuisines/${cuisine}.webp")
+  CT=$(curl -s -I "$BASE/images/cuisines/${cuisine}.webp" | grep -i "^content-type:" | tr -d '\r')
+  if [ "$STATUS" = "200" ] && echo "$CT" | grep -q "image/webp"; then
+    ok "GET /images/cuisines/${cuisine}.webp → 200 image/webp"
+  else
+    fail "GET /images/cuisines/${cuisine}.webp → $STATUS ($CT)"
+  fi
+done
+
+# 8b. Recommend returns image_url_400 and attribution for auto-status items
+IMG_URL=$(echo "$REC" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+r = d[0] if isinstance(d, list) else d
+print(r.get('image_url_400') or '')
+" 2>/dev/null)
+IMG_AUTHOR=$(echo "$REC" | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+r = d[0] if isinstance(d, list) else d
+print(r.get('image_author') or '')
+" 2>/dev/null)
+if [ -n "$IMG_URL" ]; then
+  # image_url_400 may be a root-relative path — prepend origin if needed
+  ORIGIN=$(echo "$BASE" | python3 -c "import sys; u=sys.stdin.read().strip(); from urllib.parse import urlparse; p=urlparse(u); print(p.scheme+'://'+p.netloc)")
+  FULL_IMG_URL=$(echo "$IMG_URL" | grep -q "^http" && echo "$IMG_URL" || echo "${ORIGIN}${IMG_URL}")
+  STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$FULL_IMG_URL")
+  [ "$STATUS" = "200" ] && ok "recommend item has image_url_400 → 200 ($FULL_IMG_URL)" || fail "image_url_400 → $STATUS ($FULL_IMG_URL)"
+  [ -n "$IMG_AUTHOR" ] && ok "recommend item has image_author: $IMG_AUTHOR" || fail "recommend item missing image_author"
+else
+  ok "recommend item has no image (cuisine placeholder expected in frontend)"
+fi
+
+# 8c. Cache-Control header present on a static image
+CC=$(curl -s -I "$BASE/images/cuisines/american.webp" | grep -i "^cache-control:" | tr -d '\r')
+echo "$CC" | grep -q "immutable" && ok "Cache-Control immutable on cuisine placeholder" || fail "Cache-Control missing immutable: $CC"
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo
 echo "══════════════════════════════"
