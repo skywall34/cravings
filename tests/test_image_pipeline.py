@@ -14,6 +14,7 @@ from tests.mocks.wikimedia_responses import (
     COMMONS_EXTMETA_CC_BY_SA,
     COMMONS_EXTMETA_REJECTED,
     COMMONS_IMAGE_URL,
+    COMMONS_SEARCH_MISS,
     SPARQL_TIER1_HIT,
     SPARQL_TIER1_MISS,
     WIKIPEDIA_PAGEIMAGE_HIT,
@@ -172,6 +173,7 @@ class TestPipelineEndToEnd:
             client = _mock_client_seq(
                 SPARQL_TIER1_MISS,
                 WIKIPEDIA_PAGEIMAGE_MISS, WIKIPEDIA_PAGEIMAGE_MISS,  # tier-2 misses (2 attempts)
+                COMMONS_SEARCH_MISS,                                  # tier-2.5 miss
                 WIKIPEDIA_PAGEIMAGE_HIT,   # tier-3 hit
                 COMMONS_EXTMETA_CC_BY_SA,  # metadata
                 COMMONS_IMAGE_URL,         # image URL lookup

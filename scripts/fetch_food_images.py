@@ -39,24 +39,22 @@ TARGET_SIZES = [400, 800]
 WEBP_QUALITY = 80
 
 CUISINE_LIST = [
-    "american", "chinese", "french", "greek", "indian",
-    "italian", "japanese", "korean", "mediterranean", "mexican",
-    "thai", "vietnamese",
+    "american", "chinese", "indian", "italian", "japanese",
+    "korean", "mediterranean", "mexican", "middle_eastern", "other", "thai",
 ]
 
 CUISINE_SEARCH_TERMS = {
     "american": "American cuisine",
     "chinese": "Chinese cuisine",
-    "french": "French cuisine",
-    "greek": "Greek cuisine",
     "indian": "Indian cuisine",
     "italian": "Italian cuisine",
     "japanese": "Japanese cuisine",
     "korean": "Korean cuisine",
     "mediterranean": "Mediterranean cuisine",
     "mexican": "Mexican cuisine",
+    "middle_eastern": "Middle Eastern cuisine",
+    "other": "world cuisine food",
     "thai": "Thai cuisine",
-    "vietnamese": "Vietnamese cuisine",
 }
 
 
@@ -150,7 +148,12 @@ def process_one(
         return False
 
     food_dir.mkdir(parents=True, exist_ok=True)
-    _process_and_save(raw_bytes, slug, hash_, food_dir)
+    try:
+        _process_and_save(raw_bytes, slug, hash_, food_dir)
+    except Exception as e:
+        print(f"image processing failed: {e}")
+        _append_missing(item_id, name, cuisine, f"processing_error:{e}", candidate.file_page)
+        return False
 
     review_status = "needs_review" if candidate.review_needed else "auto"
 
@@ -283,7 +286,7 @@ def cmd_placeholders(args: argparse.Namespace) -> None:
     cuisines_dir.mkdir(parents=True, exist_ok=True)
 
     attribution_file = cuisines_dir / "ATTRIBUTION.md"
-    attribution_lines = ["# Cuisine Placeholder Attribution\n\n"]
+    new_entries: list[str] = []
 
     with httpx.Client() as client:
         for cuisine in CUISINE_LIST:
@@ -327,17 +330,21 @@ def cmd_placeholders(args: argparse.Namespace) -> None:
             img = img.resize((width, height), Image.LANCZOS)
             img.save(out_400, "WEBP", quality=WEBP_QUALITY)
 
-            attribution_lines.append(
-                f"## {cuisine.title()}\n"
+            new_entries.append(
+                f"## {cuisine.replace('_', ' ').title()}\n"
                 f"- Author: {attribution.author}\n"
                 f"- License: {attribution.license}\n"
-                f"- Source: {attribution.source_url}\n\n"
+                f"- Source: {attribution.source_url}\n"
             )
 
             print(f"saved {out_400.name} ({attribution.license})")
 
-    attribution_file.write_text("".join(attribution_lines))
-    print(f"\nPlaceholders done. Attribution written to {attribution_file}")
+    if new_entries:
+        existing = attribution_file.read_text() if attribution_file.exists() else "# Cuisine Placeholder Attribution\n"
+        attribution_file.write_text(existing.rstrip() + "\n\n" + "\n\n".join(new_entries) + "\n")
+        print(f"\nPlaceholders done. {len(new_entries)} entries appended to {attribution_file}")
+    else:
+        print("\nPlaceholders done. No new entries.")
 
 
 def main() -> None:

@@ -219,19 +219,62 @@ def find_image_tier2(item_name: str, cuisine_type: str, client: httpx.Client) ->
     return _image_from_wikipedia_summary(f"{item_name} (dish)", 2, client)
 
 
+def find_image_tier25(item_name: str, client: httpx.Client) -> Optional[ImageCandidate]:
+    """Wikimedia Commons full-text search in File namespace.
+
+    Searches for the item name in Commons file titles/descriptions, checks the
+    top-5 results for a valid CC license, and returns the first hit. Marked
+    auto (no manual review required) since the license is verified server-side.
+    """
+    try:
+        resp = client.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": f"{item_name} filetype:bitmap",
+                "srnamespace": "6",
+                "srlimit": "5",
+                "srprop": "title",
+                "format": "json",
+            },
+            headers=_HEADERS,
+            timeout=15,
+        )
+        if resp.status_code == 429:
+            return None
+        resp.raise_for_status()
+        results = resp.json().get("query", {}).get("search", [])
+        for r in results:
+            title = r["title"]
+            file_page = f"https://commons.wikimedia.org/wiki/{title.replace(' ', '_')}"
+            attr = fetch_metadata(file_page, client)
+            time.sleep(0.3)
+            if attr:
+                return ImageCandidate(file_page=file_page, tier=25, review_needed=False)
+    except Exception:
+        pass
+    return None
+
+
 def find_image_tier3(item_name: str, client: httpx.Client) -> Optional[ImageCandidate]:
     """Wikipedia REST summary on plain title (may be wrong — needs_review)."""
     return _image_from_wikipedia_summary(item_name, 3, client)
 
 
 def find_image(item_name: str, cuisine_type: str, client: httpx.Client) -> Optional[ImageCandidate]:
-    """Run tier 1 → 2 → 3 disambiguation. Returns first hit or None."""
+    """Run tier 1 → 2 → 2.5 → 3 disambiguation. Returns first hit or None."""
     candidate = find_image_tier1(item_name, client)
     if candidate:
         return candidate
 
     time.sleep(0.5)
     candidate = find_image_tier2(item_name, cuisine_type, client)
+    if candidate:
+        return candidate
+
+    time.sleep(0.5)
+    candidate = find_image_tier25(item_name, client)
     if candidate:
         return candidate
 

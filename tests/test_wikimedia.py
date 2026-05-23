@@ -8,6 +8,7 @@ import pytest
 from tests.mocks.wikimedia_responses import (
     COMMONS_EXTMETA_CC_BY_SA,
     COMMONS_EXTMETA_REJECTED,
+    COMMONS_SEARCH_MISS,
     SPARQL_TIER1_HIT,
     SPARQL_TIER1_MISS,
     WIKIPEDIA_PAGEIMAGE_HIT,
@@ -170,11 +171,13 @@ class TestFindImage:
         assert result.tier == 2
 
     def test_falls_through_to_tier3(self):
-        """Tier 1 miss + tier 2 misses → tier 3 hit (needs_review)."""
+        """Tier 1 miss + tier 2 misses + tier 2.5 miss → tier 3 hit (needs_review)."""
         # Tier 2 makes 2 calls: "{name} (cuisine dish)" + "{name} (dish)"
+        # Tier 2.5 makes 1 call: Commons search (returns empty)
         client = _mock_client(
             SPARQL_TIER1_MISS,
             WIKIPEDIA_PAGEIMAGE_MISS, WIKIPEDIA_PAGEIMAGE_MISS,  # tier 2
+            COMMONS_SEARCH_MISS,                                  # tier 2.5
             WIKIPEDIA_PAGEIMAGE_HIT,                              # tier 3
         )
         with patch("tagging.wikimedia.time.sleep"):
@@ -187,6 +190,7 @@ class TestFindImage:
         client = _mock_client(
             SPARQL_TIER1_MISS,
             WIKIPEDIA_PAGEIMAGE_MISS, WIKIPEDIA_PAGEIMAGE_MISS,  # tier 2
+            COMMONS_SEARCH_MISS,                                  # tier 2.5
             WIKIPEDIA_PAGEIMAGE_MISS,                             # tier 3
         )
         with patch("tagging.wikimedia.time.sleep"):

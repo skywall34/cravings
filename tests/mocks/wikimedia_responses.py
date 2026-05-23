@@ -83,6 +83,10 @@ COMMONS_EXTMETA_REJECTED = {
     }
 }
 
+COMMONS_SEARCH_MISS = {
+    "query": {"search": []}
+}
+
 COMMONS_IMAGE_URL = {
     "query": {
         "pages": {
