@@ -47,6 +47,9 @@ async def lifespan(app: FastAPI):
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
     _images_root = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
     db.init_db(_db_path)
+    from db.seed_sync import sync_content_from_seed
+    with db.db_connection(_db_path) as _seed_conn:
+        sync_content_from_seed(_seed_conn)
     _model_service = ModelService(_db_path)
     _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""))
     _sessions = swipe.SessionStore()

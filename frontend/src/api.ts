@@ -42,6 +42,15 @@ export interface Restaurant {
 
 export type SwipeDirection = 'left' | 'right' | 'never'
 
+let recovering = false
+
+function recoverFromInvalidToken(): void {
+  if (recovering) return
+  recovering = true
+  localStorage.removeItem(TOKEN_KEY)
+  window.location.reload()
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = {
     method,
@@ -50,6 +59,10 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (body !== undefined) opts.body = JSON.stringify(body)
   const base = import.meta.env.BASE_URL.replace(/\/$/, '')
   const res = await fetch(base + path, opts)
+  if (res.status === 401 && getToken()) {
+    recoverFromInvalidToken()
+    throw new Error('session expired, reloading')
+  }
   const data: unknown = await res.json()
   if (!res.ok) {
     const errMsg =

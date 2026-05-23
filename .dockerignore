@@ -1,5 +1,8 @@
 .env
 *.db
+# Re-include the canonical content DB — baked as /app/seed/cravings.db
+# and UPSERTed into the volume DB at startup by db.seed_sync.
+!cravings.db
 .git
 .claude
 .scratch
