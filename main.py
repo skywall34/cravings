@@ -143,6 +143,39 @@ async def get_me(user=Depends(_get_user)):
     }
 
 
+@app.patch("/api/users/me")
+async def patch_me(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
+    _VALID_DIETARY = set(safety.DIETARY_FLAGS)
+    _VALID_SAFETY = set(safety.SAFETY_FLAGS)
+
+    if "dietary_restrictions" in body:
+        unknown = set(body["dietary_restrictions"]) - _VALID_DIETARY
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"unknown dietary flags: {sorted(unknown)}")
+        diet_mask = safety.compute_dietary_bitmask(body["dietary_restrictions"])
+    else:
+        diet_mask = user["dietary_flags_bitmask"]
+
+    if "safety_overrides" in body:
+        unknown = set(body["safety_overrides"]) - _VALID_SAFETY
+        if unknown:
+            raise HTTPException(status_code=422, detail=f"unknown safety flags: {sorted(unknown)}")
+        safety_mask = safety.compute_safety_bitmask(body["safety_overrides"])
+    else:
+        safety_mask = user["safety_overrides_bitmask"]
+
+    db.update_user_dietary(conn, user["id"], diet_mask, safety_mask)
+    return {
+        "id": user["id"],
+        "name": user["name"],
+        "email": user["email"],
+        "is_registered": user["email"] is not None,
+        "dietary_restrictions": safety.dietary_list_from_bitmask(diet_mask),
+        "safety_overrides": safety.safety_list_from_bitmask(safety_mask),
+        "onboarding_complete": bool(user["onboarding_complete"]),
+    }
+
+
 @app.post("/api/onboarding")
 async def onboarding(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
     prefs = body.get("preferences") or {}

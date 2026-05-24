@@ -246,3 +246,63 @@ async def test_stats_requires_auth(client):
     """Stats endpoint requires bearer token."""
     resp = await client.get("/api/profile/stats")
     assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/users/me
+# ---------------------------------------------------------------------------
+
+async def test_patch_me_dietary(guest_client):
+    """PATCH dietary_restrictions updates and returns new value."""
+    client, _, _ = guest_client
+    resp = await client.patch("/api/users/me", json={"dietary_restrictions": ["vegetarian", "gluten_free"]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert set(data["dietary_restrictions"]) == {"vegetarian", "gluten_free"}
+    assert data["safety_overrides"] == []
+
+    # Persisted: GET reflects change
+    me = await client.get("/api/users/me")
+    assert set(me.json()["dietary_restrictions"]) == {"vegetarian", "gluten_free"}
+
+
+async def test_patch_me_safety_overrides(guest_client):
+    """PATCH safety_overrides updates independently."""
+    client, _, _ = guest_client
+    resp = await client.patch("/api/users/me", json={"safety_overrides": ["raw_fish"]})
+    assert resp.status_code == 200
+    assert resp.json()["safety_overrides"] == ["raw_fish"]
+
+
+async def test_patch_me_partial_update(guest_client):
+    """PATCH only the field sent; other field unchanged."""
+    client, _, _ = guest_client
+    await client.patch("/api/users/me", json={"dietary_restrictions": ["vegan"]})
+    # Now patch only safety_overrides — dietary should stay
+    resp = await client.patch("/api/users/me", json={"safety_overrides": ["raw_egg"]})
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["dietary_restrictions"] == ["vegan"]
+    assert data["safety_overrides"] == ["raw_egg"]
+
+
+async def test_patch_me_clear_restrictions(guest_client):
+    """PATCH with empty list clears restrictions."""
+    client, _, _ = guest_client
+    await client.patch("/api/users/me", json={"dietary_restrictions": ["vegan"]})
+    resp = await client.patch("/api/users/me", json={"dietary_restrictions": []})
+    assert resp.status_code == 200
+    assert resp.json()["dietary_restrictions"] == []
+
+
+async def test_patch_me_unknown_flag(guest_client):
+    """Unknown dietary flag returns 422."""
+    client, _, _ = guest_client
+    resp = await client.patch("/api/users/me", json={"dietary_restrictions": ["not_a_flag"]})
+    assert resp.status_code == 422
+
+
+async def test_patch_me_requires_auth(client):
+    """PATCH without token returns 401/403."""
+    resp = await client.patch("/api/users/me", json={"dietary_restrictions": []})
+    assert resp.status_code in (401, 403)

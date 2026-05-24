@@ -71,6 +71,17 @@ def update_user_model_state(conn: sqlite3.Connection, user_id: int,
     conn.commit()
 
 
+def update_user_dietary(conn: sqlite3.Connection, user_id: int,
+                        dietary_flags_bitmask: int,
+                        safety_overrides_bitmask: int) -> None:
+    conn.execute(
+        "UPDATE users SET dietary_flags_bitmask = ?, safety_overrides_bitmask = ?, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [dietary_flags_bitmask, safety_overrides_bitmask, user_id],
+    )
+    conn.commit()
+
+
 def update_user_onboarding(conn: sqlite3.Connection, user_id: int,
                            dietary_flags_bitmask: int,
                            safety_overrides_bitmask: int) -> None:
