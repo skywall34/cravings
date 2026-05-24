@@ -25,6 +25,7 @@ import swipe
 from model_server.model_service import UserModelStore
 from model_server.recommendation_service import ModelServer
 from places import PlacesAdapter, PlacesError
+from rate_limit import RateLimiter
 from tagging import safety
 from tagging.client import tag_food_item
 
@@ -40,11 +41,12 @@ _places: PlacesAdapter = PlacesAdapter()
 _sessions: swipe.SessionStore = swipe.SessionStore()
 _session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
 _images_root: Path = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
+_nearby_limiter: RateLimiter = RateLimiter(capacity=10, refill_seconds=30.0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db_path, _model_service, _places, _sessions, _images_root
+    global _db_path, _model_service, _places, _sessions, _images_root, _nearby_limiter
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
     _images_root = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
     db.init_db(_db_path)
@@ -54,6 +56,10 @@ async def lifespan(app: FastAPI):
     _model_service = ModelServer(UserModelStore(_db_path))
     _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""))
     _sessions = swipe.SessionStore()
+    _nearby_limiter = RateLimiter(
+        capacity=int(os.environ.get("CRAVINGS_NEARBY_BURST", "10")),
+        refill_seconds=float(os.environ.get("CRAVINGS_NEARBY_REFILL_SECONDS", "30")),
+    )
 
     yield
 
@@ -284,6 +290,18 @@ async def nearby(
     item = db.get_food_item(conn, food_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="food item not found")
+
+    if _places.api_key:
+        allowed, retry_after = await _nearby_limiter.consume(f"user:{user['id']}")
+        if not allowed:
+            retry_int = max(1, int(retry_after))
+            logger.warning("nearby rate limited user=%d retry_after=%s", user["id"], retry_int)
+            raise HTTPException(
+                status_code=429,
+                detail={"detail": "rate limited", "retry_after": retry_int},
+                headers={"Retry-After": str(retry_int)},
+            )
+
     fallback = f"{item['cuisine_type'] or ''} restaurant".strip()
     try:
         return await _places.search(item["name"], fallback, lat, lng)

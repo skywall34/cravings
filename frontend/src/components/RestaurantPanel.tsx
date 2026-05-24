@@ -94,10 +94,11 @@ function RestaurantCard({ restaurant }: RestaurantCardProps) {
 interface RestaurantPanelProps {
   food: FoodItem | null
   restaurants: Restaurant[] | null
+  rateLimitedSeconds?: number | null
   onDismiss: () => void
 }
 
-export function RestaurantPanel({ food, restaurants, onDismiss }: RestaurantPanelProps) {
+export function RestaurantPanel({ food, restaurants, rateLimitedSeconds, onDismiss }: RestaurantPanelProps) {
   const cuisine = food?.cuisine_type?.toLowerCase() ?? ''
   const emoji = CUISINE_EMOJI[cuisine] ?? '🍽️'
 
@@ -139,9 +140,11 @@ export function RestaurantPanel({ food, restaurants, onDismiss }: RestaurantPane
           display: 'flex', flexDirection: 'column', alignItems: 'center',
           padding: '24px 0', textAlign: 'center', gap: 8,
         }}>
-          <div style={{ fontSize: 40 }}>📍</div>
+          <div style={{ fontSize: 40 }}>{rateLimitedSeconds ? '⏳' : '📍'}</div>
           <p style={{ margin: 0, color: '#6B6B6B', fontSize: '0.92rem', lineHeight: 1.5 }}>
-            No nearby restaurants found. Try enabling location for better results.
+            {rateLimitedSeconds
+              ? `Slow down — too many lookups. Try again in ${rateLimitedSeconds}s.`
+              : 'No nearby restaurants found. Try enabling location for better results.'}
           </p>
         </div>
       ) : (

@@ -51,6 +51,15 @@ function recoverFromInvalidToken(): void {
   window.location.reload()
 }
 
+export class RateLimitError extends Error {
+  retry_after: number
+  constructor(retry_after: number) {
+    super(`rate limited, retry in ${retry_after}s`)
+    this.name = 'RateLimitError'
+    this.retry_after = retry_after
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = {
     method,
@@ -64,6 +73,17 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     throw new Error('session expired, reloading')
   }
   const data: unknown = await res.json()
+  if (res.status === 429) {
+    const headerRetry = Number(res.headers.get('Retry-After')) || 0
+    let bodyRetry = 0
+    if (data !== null && typeof data === 'object' && 'detail' in data) {
+      const detail = data.detail
+      if (detail !== null && typeof detail === 'object' && 'retry_after' in detail) {
+        bodyRetry = Number(detail.retry_after) || 0
+      }
+    }
+    throw new RateLimitError(bodyRetry || headerRetry || 1)
+  }
   if (!res.ok) {
     const errMsg =
       data !== null && typeof data === 'object' && 'detail' in data

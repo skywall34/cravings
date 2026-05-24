@@ -426,6 +426,29 @@ async def test_nearby_response_shape(auth_client):
         assert set(place.keys()) >= {"name", "address", "rating", "maps_url"}
 
 
+async def test_nearby_rate_limited_returns_429(auth_client):
+    """11th request in a burst returns 429 with Retry-After + retry_after body."""
+    from unittest.mock import AsyncMock, patch
+
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+    main._nearby_limiter.reset()
+    url = f"/api/nearby?food_item_id={item_id}&lat=37.77&lng=-122.41"
+    with patch.object(main._places, "api_key", "fake-key"), \
+         patch.object(main._places, "search", new=AsyncMock(return_value=[])):
+        for _ in range(main._nearby_limiter.capacity):
+            ok = await client.get(url)
+            assert ok.status_code == 200
+        blocked = await client.get(url)
+    assert blocked.status_code == 429
+    assert "Retry-After" in blocked.headers
+    assert int(blocked.headers["Retry-After"]) >= 1
+    body = blocked.json()
+    assert body["detail"]["detail"] == "rate limited"
+    assert body["detail"]["retry_after"] >= 1
+    main._nearby_limiter.reset()
+
+
 # ---------------------------------------------------------------------------
 # Admin batch
 # ---------------------------------------------------------------------------

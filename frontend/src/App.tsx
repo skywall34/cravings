@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout } from './api'
+import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout, RateLimitError } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo } from './api'
 import { useLocation } from './hooks/useLocation'
 import { SwipeCard } from './components/SwipeCard'
@@ -79,6 +79,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [restaurants, setRestaurants] = useState<Restaurant[] | null>([])
+  const [rateLimitedSeconds, setRateLimitedSeconds] = useState<number | null>(null)
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null)
   const [swiping, setSwiping] = useState(false)
   const [swipeHistory, setSwipeHistory] = useState<SwipeEntry[]>([])
@@ -171,14 +172,20 @@ export default function App() {
       if (direction === 'right') {
         setSelectedFood(swipedFood)
         setRestaurants(null)
+        setRateLimitedSeconds(null)
         setScreen('restaurants')
 
         try {
           const loc = await requestLocation()
           const nearby = await getNearby(swipedFood.id, loc.lat, loc.lng)
           setRestaurants(nearby)
-        } catch {
-          setRestaurants([])
+        } catch (err) {
+          if (err instanceof RateLimitError) {
+            setRateLimitedSeconds(err.retry_after)
+            setRestaurants([])
+          } else {
+            setRestaurants([])
+          }
         }
       } else {
         await loadNextCard()
@@ -315,6 +322,7 @@ export default function App() {
             <RestaurantPanel
               food={selectedFood}
               restaurants={restaurants}
+              rateLimitedSeconds={rateLimitedSeconds}
               onDismiss={() => void handleDismissPanel()}
             />
           </div>
