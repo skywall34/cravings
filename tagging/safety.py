@@ -1,5 +1,8 @@
 """Safety and dietary flag bitmask computation."""
 
+from __future__ import annotations
+from dataclasses import dataclass, field
+
 SAFETY_FLAGS = {
     "raw_fish": 0,
     "raw_egg": 1,
@@ -68,6 +71,21 @@ _ALL_SAFETY_BITS = (1 << len(SAFETY_FLAGS)) - 1
 def user_safety_mask(safety_overrides_bitmask: int) -> int:
     """Effective safety filter mask: all hard-safety flags minus user overrides."""
     return _ALL_SAFETY_BITS & ~safety_overrides_bitmask
+
+
+@dataclass(frozen=True)
+class UserFilter:
+    """Collapsed safety + dietary constraints for a user. One call, one object."""
+
+    safety_mask: int
+    dietary_restrictions: list[str] = field(default_factory=list)
+
+    @classmethod
+    def from_user(cls, user: dict) -> "UserFilter":
+        return cls(
+            safety_mask=user_safety_mask(user["safety_overrides_bitmask"]),
+            dietary_restrictions=dietary_list_from_bitmask(user["dietary_flags_bitmask"]),
+        )
 
 
 def build_dietary_filter_clauses(dietary_restrictions: list[str]) -> tuple[list[str], list[int]]:

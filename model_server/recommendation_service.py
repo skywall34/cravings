@@ -1,8 +1,4 @@
-"""Business logic for recommendation, swipe recording, status, and onboarding.
-
-Separated from the gRPC binding so it can be tested and called without a gRPC server.
-The ModelServiceServicer in server.py is a thin adapter over this class.
-"""
+"""Thompson Sampling model server: recommendation, swipe recording, status, and onboarding."""
 
 from __future__ import annotations
 
@@ -15,6 +11,7 @@ from db.database import (
     db_connection, get_recent_likes, push_recent_like, get_embeddings_for_items,
     record_impression, get_least_impressed,
 )
+
 from model.features import FeatureSchema
 
 logger = logging.getLogger(__name__)
@@ -43,7 +40,7 @@ def _boost_with_similarity(
     return out
 
 
-class RecommendationService:
+class ModelServer:
     def __init__(self, store, schema: FeatureSchema | None = None):
         self.store = store
         self.schema = schema or FeatureSchema()
@@ -61,28 +58,20 @@ class RecommendationService:
         lam = 0.0 if not liked_embeddings else (0.3 if model.total_swipes < 20 else 0.1)
         return liked_embeddings, lam
 
-    def _get_swiped_cuisines(self, user_id: int) -> set[str]:
-        """Return set of cuisine_types the user has swiped on (excludes 'other')."""
-        try:
-            with db_connection(self.store.db_path) as conn:
-                rows = conn.execute(
-                    "SELECT DISTINCT f.cuisine_type FROM swipe_events se "
-                    "JOIN food_items f ON se.food_item_id = f.id WHERE se.user_id = ?",
-                    [user_id],
-                ).fetchall()
-            return {r[0] for r in rows if r[0] and r[0] != "other"}
-        except Exception as e:
-            logger.warning("get_swiped_cuisines failed: %s", e)
-            return set()
-
     def recommend(
         self,
         user_id: int,
         candidates: list[dict],
         context: dict,
         top_n: int = 1,
+        swiped_cuisines: set[str] | None = None,
     ) -> list[dict]:
-        """Score candidates for user and return top_n as [{id, name, score, rank}]."""
+        """Score candidates for user and return top_n as [{id, name, score, rank}].
+
+        swiped_cuisines: set of cuisine_types already seen by this user (for stratified
+        cold-start). Compute via db.get_swiped_cuisines before calling. Defaults to empty
+        set (treats user as new) when not provided.
+        """
         model = self.store.get(user_id)
         decayed_days = model.maybe_apply_decay()
         if decayed_days > 0:
@@ -99,8 +88,7 @@ class RecommendationService:
             for c in candidates
             if c.get("cuisine_type") and c["cuisine_type"] != "other"
         }
-        swiped_cuisines = self._get_swiped_cuisines(user_id)
-        unseen_cuisines = eligible_cuisines - swiped_cuisines
+        unseen_cuisines = eligible_cuisines - (swiped_cuisines or set())
 
         if unseen_cuisines:
             return self._stratified_recommend(

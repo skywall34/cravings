@@ -1,20 +1,16 @@
 """Swipe lifecycle module.
 
-Owns the contract between Right-Swipe / Left-Swipe and the rest of the app:
-context capture at recommend time, tamper-proof round-trip via signed token,
-denormalized DB write, model update, session seen-set update.
-
-Public surface:
-    Snapshot          — frozen context captured at recommend time
-    SessionStore      — per-session seen-set
-    capture()         — build a Snapshot from current user state
-    seal()/verify()   — sign/verify the snapshot for client round-trip
-    record_swipe()    — full Right-Swipe / Left-Swipe lifecycle
+Owns the full contract of a Swipe Session:
+  snapshot.py    — context capture at recommend time; HMAC-signed token for round-trip
+  session.py     — in-memory seen-set scoped per session_id
+  recorder.py    — Right-Swipe / Left-Swipe lifecycle (model + DB + session)
+  intake.py      — candidate filtering, response shaping, image URL construction
 """
 
 from swipe.snapshot import Snapshot, capture, seal, verify, SnapshotError
 from swipe.session import SessionStore
 from swipe.recorder import record_swipe
+from swipe.intake import build_intake, shape_results, add_image_urls
 
 __all__ = [
     "Snapshot",
@@ -24,4 +20,7 @@ __all__ = [
     "verify",
     "record_swipe",
     "SnapshotError",
+    "build_intake",
+    "shape_results",
+    "add_image_urls",
 ]

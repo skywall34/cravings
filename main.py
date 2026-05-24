@@ -22,7 +22,8 @@ load_dotenv()
 
 import db.database as db
 import swipe
-from model_server.model_service import ModelService
+from model_server.model_service import UserModelStore
+from model_server.recommendation_service import ModelServer
 from places import PlacesAdapter, PlacesError
 from tagging import safety
 from tagging.client import tag_food_item
@@ -34,7 +35,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 _db_path: Path = Path("cravings.db")  # resolved in lifespan from env
-_model_service: ModelService | None = None
+_model_service: ModelServer | None = None
 _places: PlacesAdapter = PlacesAdapter()
 _sessions: swipe.SessionStore = swipe.SessionStore()
 _session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
@@ -50,7 +51,7 @@ async def lifespan(app: FastAPI):
     from db.seed_sync import sync_content_from_seed
     with db.db_connection(_db_path) as _seed_conn:
         sync_content_from_seed(_seed_conn)
-    _model_service = ModelService(_db_path)
+    _model_service = ModelServer(UserModelStore(_db_path))
     _places = PlacesAdapter(api_key=os.environ.get("GOOGLE_PLACES_API_KEY", ""))
     _sessions = swipe.SessionStore()
 
@@ -196,46 +197,21 @@ async def recommend(
     user=Depends(_get_user),
     conn=Depends(_get_conn),
 ):
-    snapshot = swipe.capture(conn, user["id"], dietary_mode, mood, hour)
-
-    safety_mask = safety.user_safety_mask(user["safety_overrides_bitmask"])
-    restrictions = safety.dietary_list_from_bitmask(user["dietary_flags_bitmask"])
-    excluded = await _sessions.seen(session_id)
-
-    candidates = db.get_eligible_food_items(conn, safety_mask, restrictions, excluded)
+    snapshot, candidates = await swipe.build_intake(
+        conn, _sessions, user, dietary_mode, mood, hour, session_id
+    )
     if not candidates:
         raise HTTPException(status_code=404, detail="no eligible food items")
 
+    swiped_cuisines = db.get_swiped_cuisines(conn, user["id"])
     results = await asyncio.to_thread(
-        _model_service.get_recommendation, user["id"], candidates, snapshot.to_context(), top_n
+        _model_service.recommend, user["id"], candidates, snapshot.to_context(), top_n,
+        swiped_cuisines,
     )
     if not results:
         raise HTTPException(status_code=404, detail="no eligible food items")
 
-    id_to_candidate = {c["id"]: c for c in candidates}
-    token = swipe.seal(snapshot)
-    for r in results:
-        r["snapshot_token"] = token
-        candidate = id_to_candidate.get(r["id"], {})
-        r.update({
-            "description": candidate.get("description"),
-            "cuisine_type": candidate.get("cuisine_type"),
-            "spice_level": candidate.get("spice_level"),
-            "sweetness": candidate.get("sweetness"),
-            "richness": candidate.get("richness"),
-            "sauce_heaviness": candidate.get("sauce_heaviness"),
-            "veggie_density": candidate.get("veggie_density"),
-            "dairy_content": candidate.get("dairy_content"),
-            "protein_type": candidate.get("protein_type"),
-            "image_slug": candidate.get("image_slug"),
-            "image_hash": candidate.get("image_hash"),
-            "image_author": candidate.get("image_author"),
-            "image_license": candidate.get("image_license"),
-            "image_source_url": candidate.get("image_source_url"),
-            "image_review_status": candidate.get("image_review_status", "auto"),
-        })
-        _build_image_urls(r)
-    return results
+    return swipe.shape_results(results, candidates, snapshot, _base_path)
 
 
 @app.post("/api/swipe")
@@ -283,7 +259,7 @@ async def get_food_item(item_id: int, conn=Depends(_get_conn), user=Depends(_get
     item = db.get_food_item(conn, item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="not found")
-    return _build_image_urls(item)
+    return swipe.add_image_urls(item, _base_path)
 
 
 @app.get("/api/restaurants")
@@ -481,25 +457,6 @@ async def admin_batch(body: dict):
         "food_items_inserted": len(item_ids),
         "tagging": "queued",
     }
-
-
-# ---------------------------------------------------------------------------
-# Image URL helper
-# ---------------------------------------------------------------------------
-
-def _build_image_urls(item: dict) -> dict:
-    """Add image_url_400, image_url_800 fields to a food item dict."""
-    slug = item.get("image_slug")
-    hash_ = item.get("image_hash")
-    status = item.get("image_review_status", "auto")
-    if slug and hash_ and status in ("auto", "approved", "needs_review"):
-        base = f"{_base_path}/images/food/{slug}-{hash_}"
-        item["image_url_400"] = f"{base}-400.webp"
-        item["image_url_800"] = f"{base}-800.webp"
-    else:
-        item["image_url_400"] = None
-        item["image_url_800"] = None
-    return item
 
 
 # ---------------------------------------------------------------------------

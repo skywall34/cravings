@@ -1,4 +1,4 @@
-"""Direct Python interface to the Thompson Sampling model, replacing the gRPC adapter."""
+"""Thread-safe per-user model cache backed by the sqlite users table."""
 
 import io
 import threading
@@ -9,7 +9,6 @@ import numpy as np
 from db.database import db_connection, get_user, update_user_model_state, DEFAULT_DB_PATH
 from model.features import FeatureSchema
 from model.thompson import ThompsonSamplingModel, ModelConfig
-from model_server.recommendation_service import RecommendationService
 
 
 def _serialize_array(arr: np.ndarray) -> bytes:
@@ -77,22 +76,3 @@ class UserModelStore:
             )
 
 
-class ModelService:
-    """Synchronous façade over RecommendationService. Call from asyncio via asyncio.to_thread."""
-
-    def __init__(self, db_path: Path = DEFAULT_DB_PATH):
-        self._svc = RecommendationService(UserModelStore(db_path))
-
-    def get_recommendation(
-        self, user_id: int, candidates: list[dict], context: dict, top_n: int = 1
-    ) -> list[dict]:
-        return self._svc.recommend(user_id, candidates, context, top_n)
-
-    def record_swipe(self, user_id: int, item: dict, context: dict, reward: int) -> int:
-        return self._svc.record_swipe(user_id, item, context, reward)
-
-    def get_status(self, user_id: int) -> dict:
-        return self._svc.get_status(user_id)
-
-    def set_onboarding(self, user_id: int, preferences: dict) -> None:
-        self._svc.set_onboarding(user_id, preferences)

@@ -1,13 +1,13 @@
-"""Tests for the model service layer (previously gRPC server, now direct Python calls)."""
+"""Tests for the model server layer."""
 
 import tempfile
 from pathlib import Path
 
 import pytest
 
-from db.database import init_db, insert_user, get_connection, record_swipe as db_record_swipe
-from model_server.model_service import ModelService, UserModelStore
-from model_server.recommendation_service import RecommendationService
+from db.database import init_db, insert_user, get_connection, record_swipe as db_record_swipe, get_swiped_cuisines
+from model_server.model_service import UserModelStore
+from model_server.recommendation_service import ModelServer
 
 
 def _insert_item_with_cuisine(conn, item_id: int, cuisine: str) -> dict:
@@ -63,13 +63,13 @@ def db_with_user():
     db_path.unlink(missing_ok=True)
 
 
-class TestRecommendationServiceDirect:
-    """Tests that drive RecommendationService directly (no gRPC machinery)."""
+class TestModelServer:
+    """Tests for ModelServer — Thompson Sampling recommend/swipe/status/onboarding."""
 
     @pytest.fixture
     def service(self, db_with_user):
         db_path, _ = db_with_user
-        return RecommendationService(UserModelStore(db_path))
+        return ModelServer(UserModelStore(db_path))
 
     def test_recommend_returns_scored_items(self, service, db_with_user):
         _, uid = db_with_user
@@ -119,49 +119,17 @@ class TestRecommendationServiceDirect:
 
     def test_persist_and_reload(self, db_with_user):
         db_path, uid = db_with_user
-        svc1 = RecommendationService(UserModelStore(db_path))
+        svc1 = ModelServer(UserModelStore(db_path))
         item = make_item_dict()
         ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
         svc1.record_swipe(uid, item, ctx, reward=1)
-        svc2 = RecommendationService(UserModelStore(db_path))
+        svc2 = ModelServer(UserModelStore(db_path))
         status = svc2.get_status(uid)
         assert status["total_swipes"] == 1
 
 
-class TestModelService:
-    """Tests for the ModelService façade used by the FastAPI app."""
-
-    @pytest.fixture
-    def svc(self, db_with_user):
-        db_path, _ = db_with_user
-        return ModelService(db_path)
-
-    def test_get_recommendation(self, svc, db_with_user):
-        _, uid = db_with_user
-        candidates = [make_item_dict(id=1), make_item_dict(id=2)]
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
-        results = svc.get_recommendation(uid, candidates, ctx, top_n=1)
-        assert len(results) == 1
-        assert "id" in results[0]
-        assert "score" in results[0]
-
-    def test_record_swipe(self, svc, db_with_user):
-        _, uid = db_with_user
-        item = make_item_dict()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
-        total = svc.record_swipe(uid, item, ctx, reward=1)
-        assert total == 1
-
-    def test_get_status(self, svc, db_with_user):
-        _, uid = db_with_user
-        status = svc.get_status(uid)
-        assert status["total_swipes"] == 0
-
-    def test_set_onboarding(self, svc, db_with_user):
-        _, uid = db_with_user
-        svc.set_onboarding(uid, {"spice_level": 0.8, "sweetness": -0.5})
-        status = svc.get_status(uid)
-        assert status["total_swipes"] == 0
+class TestModelServerIsolation:
+    """Per-user model isolation via ModelServer."""
 
     def test_per_user_isolation(self, db_with_user):
         db_path, uid1 = db_with_user
@@ -169,7 +137,7 @@ class TestModelService:
         uid2, _ = insert_user(conn, "u2")
         conn.close()
 
-        svc = ModelService(db_path)
+        svc = ModelServer(UserModelStore(db_path))
         item = make_item_dict()
         ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
 
@@ -194,7 +162,7 @@ class TestStratifiedColdStart:
         uid, _ = insert_user(conn, "colduser")
         items = [_insert_item_with_cuisine(conn, i + 1, c) for i, c in enumerate(self.CUISINES)]
         conn.close()
-        svc = RecommendationService(UserModelStore(db_path))
+        svc = ModelServer(UserModelStore(db_path))
         yield db_path, uid, items, svc
         db_path.unlink(missing_ok=True)
 
@@ -223,11 +191,12 @@ class TestStratifiedColdStart:
         # Record one swipe per cuisine to mark all cuisines as seen
         for item in items:
             db_record_swipe(conn, uid, item["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+        swiped = get_swiped_cuisines(conn, uid)
         conn.close()
 
         ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
         # Should now use normal Thompson path (all cuisines covered → unseen_cuisines empty)
-        results = svc.recommend(uid, items, ctx, top_n=1)
+        results = svc.recommend(uid, items, ctx, top_n=1, swiped_cuisines=swiped)
         assert len(results) == 1
 
     def test_stratified_skips_already_swiped_cuisines(self, setup):
@@ -235,10 +204,11 @@ class TestStratifiedColdStart:
         conn = get_connection(db_path)
         # Swipe on the first item (american)
         db_record_swipe(conn, uid, items[0]["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+        swiped = get_swiped_cuisines(conn, uid)
         conn.close()
 
         ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
-        results = svc.recommend(uid, items, ctx, top_n=3)
+        results = svc.recommend(uid, items, ctx, top_n=3, swiped_cuisines=swiped)
         result_item_ids = {r["id"] for r in results}
         # american item should not appear (already swiped, american = covered)
         assert items[0]["id"] not in result_item_ids, "already-covered cuisine must not appear"
