@@ -1,4 +1,5 @@
 import type { FoodItem, Restaurant } from '../api'
+import { AllergenNote } from './AllergenNote'
 
 const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
@@ -176,9 +177,11 @@ export function RestaurantPanel({ food, restaurants, rateLimitedSeconds, onDismi
         Next food →
       </button>
 
+      <AllergenNote />
+
       <p style={{
         textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E',
-        margin: '-8px 0 0', letterSpacing: '0.02em',
+        margin: '4px 0 0', letterSpacing: '0.02em',
       }}>
         Press Enter or → to continue
       </p>

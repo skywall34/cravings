@@ -1,5 +1,6 @@
-import { useState, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
+import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import type { FoodItem, SwipeDirection } from '../api'
+import { AllergenNote } from './AllergenNote'
 
 const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
@@ -48,6 +49,9 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
 ) {
   const [animDir, setAnimDir] = useState<SwipeDirection | null>(null)
   const [neverHeld, setNeverHeld] = useState(false)
+  const [cuisineImgFailed, setCuisineImgFailed] = useState(false)
+
+  useEffect(() => { setCuisineImgFailed(false) }, [food.id])
   const neverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const handleSwipe = useCallback(
@@ -148,20 +152,21 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           </div>
         ) : (
           <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', overflow: 'hidden', background: bgColor }}>
-            {food.cuisine_type && (
+            {food.cuisine_type && !cuisineImgFailed ? (
               <img
                 src={`/images/cuisines/${food.cuisine_type.toLowerCase()}.webp`}
                 alt={food.cuisine_type}
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 loading="lazy"
-                onError={e => { e.currentTarget.style.display = 'none' }}
+                onError={() => setCuisineImgFailed(true)}
               />
+            ) : (
+              <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <span style={{ fontSize: 96, lineHeight: 1, filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.12))' }}>
+                  {emoji}
+                </span>
+              </div>
             )}
-            <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <span style={{ fontSize: 96, lineHeight: 1, filter: 'drop-shadow(0 8px 16px rgba(0,0,0,0.12))' }}>
-                {emoji}
-              </span>
-            </div>
           </div>
         )}
 
@@ -271,9 +276,10 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           </div>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E', margin: '12px 0 20px', letterSpacing: '0.02em' }}>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E', margin: '12px 0 12px', letterSpacing: '0.02em' }}>
           ← / → arrow keys · hold ✕ for Never
         </p>
+        <AllergenNote style={{ margin: '0 0 16px' }} />
       </div>
 
       {/* Overlays */}

@@ -19,9 +19,11 @@ import db.database as _db  # noqa: E402
 
 @pytest_asyncio.fixture(autouse=True)
 async def reset_db():
-    main._db_path = Path(TEST_DB)
-    Path(TEST_DB).unlink(missing_ok=True)
-    _db.init_db(Path(TEST_DB))
+    # lifespan reads CRAVINGS_DB from env, which may differ from this file's TEST_DB
+    active_db = Path(os.environ.get("CRAVINGS_DB", TEST_DB))
+    main._db_path = active_db
+    active_db.unlink(missing_ok=True)
+    _db.init_db(active_db)
     main._sessions.clear_all()
     yield
 
@@ -34,9 +36,13 @@ async def client(reset_db):
 
 
 @pytest_asyncio.fixture
-async def guest_client(client):
-    """Client with auto-created guest user; yields (client, token, user_id)."""
-    resp = await client.post("/api/users", json={"name": "guest"})
+async def registered_client(client):
+    """Client with a registered user; yields (client, token, user_id)."""
+    resp = await client.post("/api/auth/register", json={
+        "email": "auth_test_user@example.com",
+        "password": "securepass9",
+        "name": "Tester",
+    })
     assert resp.status_code == 201
     data = resp.json()
     client.headers["Authorization"] = f"Bearer {data['api_token']}"
@@ -48,7 +54,7 @@ async def guest_client(client):
 # ---------------------------------------------------------------------------
 
 async def test_register_cold(client):
-    """Cold register (no bearer) creates a new registered user."""
+    """Register creates a new user row with onboarding_complete=False."""
     resp = await client.post("/api/auth/register", json={
         "email": "alice@example.com",
         "password": "securepass1",
@@ -58,21 +64,21 @@ async def test_register_cold(client):
     data = resp.json()
     assert data["email"] == "alice@example.com"
     assert data["is_registered"] is True
+    assert data["onboarding_complete"] is False
     assert "api_token" in data
 
 
-async def test_register_claims_guest(guest_client):
-    """Registering while holding a guest token claims the guest row."""
-    client, guest_token, guest_id = guest_client
+async def test_register_always_fresh_row(client):
+    """Register always creates a clean row (no guest migration)."""
     resp = await client.post("/api/auth/register", json={
         "email": "bob@example.com",
         "password": "securepass2",
+        "name": "Bob",
     })
     assert resp.status_code == 201
     data = resp.json()
-    assert data["id"] == guest_id
-    assert data["api_token"] == guest_token
     assert data["is_registered"] is True
+    assert data["onboarding_complete"] is False
 
 
 async def test_register_email_conflict(client):
@@ -252,9 +258,9 @@ async def test_stats_requires_auth(client):
 # PATCH /api/users/me
 # ---------------------------------------------------------------------------
 
-async def test_patch_me_dietary(guest_client):
+async def test_patch_me_dietary(registered_client):
     """PATCH dietary_restrictions updates and returns new value."""
-    client, _, _ = guest_client
+    client, _, _ = registered_client
     resp = await client.patch("/api/users/me", json={"dietary_restrictions": ["vegetarian", "gluten_free"]})
     assert resp.status_code == 200
     data = resp.json()
@@ -266,17 +272,17 @@ async def test_patch_me_dietary(guest_client):
     assert set(me.json()["dietary_restrictions"]) == {"vegetarian", "gluten_free"}
 
 
-async def test_patch_me_safety_overrides(guest_client):
+async def test_patch_me_safety_overrides(registered_client):
     """PATCH safety_overrides updates independently."""
-    client, _, _ = guest_client
+    client, _, _ = registered_client
     resp = await client.patch("/api/users/me", json={"safety_overrides": ["raw_fish"]})
     assert resp.status_code == 200
     assert resp.json()["safety_overrides"] == ["raw_fish"]
 
 
-async def test_patch_me_partial_update(guest_client):
+async def test_patch_me_partial_update(registered_client):
     """PATCH only the field sent; other field unchanged."""
-    client, _, _ = guest_client
+    client, _, _ = registered_client
     await client.patch("/api/users/me", json={"dietary_restrictions": ["vegan"]})
     # Now patch only safety_overrides — dietary should stay
     resp = await client.patch("/api/users/me", json={"safety_overrides": ["raw_egg"]})
@@ -286,18 +292,18 @@ async def test_patch_me_partial_update(guest_client):
     assert data["safety_overrides"] == ["raw_egg"]
 
 
-async def test_patch_me_clear_restrictions(guest_client):
+async def test_patch_me_clear_restrictions(registered_client):
     """PATCH with empty list clears restrictions."""
-    client, _, _ = guest_client
+    client, _, _ = registered_client
     await client.patch("/api/users/me", json={"dietary_restrictions": ["vegan"]})
     resp = await client.patch("/api/users/me", json={"dietary_restrictions": []})
     assert resp.status_code == 200
     assert resp.json()["dietary_restrictions"] == []
 
 
-async def test_patch_me_unknown_flag(guest_client):
+async def test_patch_me_unknown_flag(registered_client):
     """Unknown dietary flag returns 422."""
-    client, _, _ = guest_client
+    client, _, _ = registered_client
     resp = await client.patch("/api/users/me", json={"dietary_restrictions": ["not_a_flag"]})
     assert resp.status_code == 422
 
@@ -306,3 +312,91 @@ async def test_patch_me_requires_auth(client):
     """PATCH without token returns 401/403."""
     resp = await client.patch("/api/users/me", json={"dietary_restrictions": []})
     assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# DELETE /api/users/me — GDPR Art. 17 erasure
+# ---------------------------------------------------------------------------
+
+async def test_delete_account(registered_client):
+    """Delete returns 204 and invalidates the token."""
+    client, token, _ = registered_client
+    resp = await client.delete("/api/users/me")
+    assert resp.status_code == 204
+
+    # Token is dead — user row gone
+    me = await client.get("/api/users/me")
+    assert me.status_code in (401, 403)
+
+
+async def test_delete_allows_email_reuse(registered_client):
+    """After deletion the same email can be re-registered."""
+    client, _, _ = registered_client
+    await client.delete("/api/users/me")
+    client.headers.pop("Authorization", None)
+
+    resp = await client.post("/api/auth/register", json={
+        "email": "auth_test_user@example.com",
+        "password": "newpassword1",
+        "name": "Reborn",
+    })
+    assert resp.status_code == 201
+    assert resp.json()["email"] == "auth_test_user@example.com"
+
+
+async def test_delete_requires_auth(client):
+    """DELETE without token returns 401/403."""
+    resp = await client.delete("/api/users/me")
+    assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/users/me/export — GDPR Art. 20 portability
+# ---------------------------------------------------------------------------
+
+async def test_export_returns_account_fields(registered_client):
+    """Export JSON contains account, preferences, swipe_history, stats."""
+    client, _, _ = registered_client
+    resp = await client.get("/api/users/me/export")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "account" in data
+    assert data["account"]["email"] == "auth_test_user@example.com"
+    assert "preferences" in data
+    assert "swipe_history" in data
+    assert isinstance(data["swipe_history"], list)
+    assert "stats" in data
+    assert "exported_at" in data
+
+
+async def test_export_empty_swipe_history(registered_client):
+    """Fresh account exports with empty swipe_history."""
+    client, _, _ = registered_client
+    resp = await client.get("/api/users/me/export")
+    assert resp.status_code == 200
+    assert resp.json()["swipe_history"] == []
+
+
+async def test_export_requires_auth(client):
+    """Export without token returns 401/403."""
+    resp = await client.get("/api/users/me/export")
+    assert resp.status_code in (401, 403)
+
+
+# ---------------------------------------------------------------------------
+# Location data audit
+# ---------------------------------------------------------------------------
+
+async def test_no_location_columns_in_schema(client):
+    """Schema must not store lat/lng — privacy policy commitment."""
+    import sqlite3
+    conn = sqlite3.connect(str(main._db_path))
+    conn.row_factory = sqlite3.Row
+    tables = [r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+    for table in tables:
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        assert "lat" not in cols, f"table {table!r} has lat column"
+        assert "lng" not in cols, f"table {table!r} has lng column"
+        assert "latitude" not in cols, f"table {table!r} has latitude column"
+        assert "longitude" not in cols, f"table {table!r} has longitude column"
+    conn.close()

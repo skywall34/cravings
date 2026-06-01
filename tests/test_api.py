@@ -39,8 +39,12 @@ async def client(reset_db):
 
 @pytest_asyncio.fixture
 async def auth_client(client):
-    """Client with a created user; yields (client, token, user_id)."""
-    resp = await client.post("/api/users", json={"name": "Alice"})
+    """Client with a registered user; yields (client, token, user_id)."""
+    resp = await client.post("/api/auth/register", json={
+        "email": "api_test_user@example.com",
+        "password": "securepass1",
+        "name": "Alice",
+    })
     assert resp.status_code == 201
     data = resp.json()
     token = data["api_token"]
@@ -83,40 +87,42 @@ async def test_health(client):
 
 
 # ---------------------------------------------------------------------------
-# User creation
+# Guest (stateless — no DB row)
 # ---------------------------------------------------------------------------
 
-async def test_create_user(client):
-    resp = await client.post("/api/users", json={"name": "Bob"})
-    assert resp.status_code == 201
+async def test_guest_recommend_no_items(client):
+    """Guest recommend with no food items returns 404."""
+    resp = await client.get("/api/recommend?session_id=g1")
+    assert resp.status_code == 404
+
+
+async def test_guest_recommend_returns_item(client):
+    """Guest recommend with no auth token uses global popularity path."""
+    _insert_food_item(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=g1")
+    assert resp.status_code == 200
     data = resp.json()
-    assert data["name"] == "Bob"
-    assert "api_token" in data
-    assert isinstance(data["id"], int)
-    assert data["dietary_restrictions"] == []
-    assert data["safety_overrides"] == []
+    assert len(data) >= 1
+    assert "id" in data[0]
+    assert "snapshot_token" in data[0]
 
 
-async def test_create_user_with_restrictions(client):
-    resp = await client.post("/api/users", json={
-        "name": "Vegan User",
-        "dietary_restrictions": ["vegan"],
-        "safety_overrides": ["raw_fish"],
+async def test_guest_swipe(client):
+    """Guest swipe verifies session-bound snapshot and marks seen, no DB write."""
+    _insert_food_item(TEST_DB)
+    rec = await client.get("/api/recommend?session_id=g1")
+    assert rec.status_code == 200
+    item = rec.json()[0]
+    resp = await client.post("/api/swipe", json={
+        "food_item_id": item["id"],
+        "direction": "left",
+        "session_id": "g1",
+        "snapshot_token": item["snapshot_token"],
     })
-    assert resp.status_code == 201
+    assert resp.status_code == 200
     data = resp.json()
-    assert "vegan" in data["dietary_restrictions"]
-    assert "raw_fish" in data["safety_overrides"]
-
-
-async def test_create_user_missing_name(client):
-    resp = await client.post("/api/users", json={"name": ""})
-    assert resp.status_code == 400
-
-
-async def test_create_user_no_name_field(client):
-    resp = await client.post("/api/users", json={})
-    assert resp.status_code == 400
+    assert data["success"] is True
+    assert data["total_swipes"] == 0  # guests have no persistent swipe count
 
 
 # ---------------------------------------------------------------------------

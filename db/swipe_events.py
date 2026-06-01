@@ -132,3 +132,23 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "mood_breakdown": mood_breakdown,
         "hour_breakdown": hour_breakdown,
     }
+
+
+def delete_swipes_for_user(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute("DELETE FROM swipe_events WHERE user_id = ?", [user_id])
+
+
+def delete_impressions_for_user(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute("DELETE FROM user_item_impressions WHERE user_id = ?", [user_id])
+
+
+def get_all_swipes_for_user(conn: sqlite3.Connection, user_id: int) -> list[dict]:
+    rows = conn.execute(
+        "SELECT se.direction, se.timestamp, se.mood, se.dietary_mode, "
+        "fi.name AS food_name, fi.cuisine_type "
+        "FROM swipe_events se "
+        "JOIN food_items fi ON fi.id = se.food_item_id "
+        "WHERE se.user_id = ? ORDER BY se.timestamp",
+        [user_id],
+    ).fetchall()
+    return [dict(r) for r in rows]

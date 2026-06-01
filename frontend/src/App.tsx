@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout, RateLimitError } from './api'
-import type { FoodItem, Restaurant, SwipeDirection, UserInfo } from './api'
+import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
 import { useLocation } from './hooks/useLocation'
 import { SwipeCard } from './components/SwipeCard'
 import type { SwipeCardHandle } from './components/SwipeCard'
@@ -15,12 +15,29 @@ import { AuthMenu } from './components/AuthMenu'
 import { LoginForm } from './components/LoginForm'
 import { RegisterForm } from './components/RegisterForm'
 import { ProfilePage } from './components/ProfilePage'
+import { ConsentBanner } from './components/ConsentBanner'
+import { LegalPage } from './components/LegalPages'
 import './App.css'
 
+const LOCATION_CONSENT_KEY = 'cravings_location_consent'
+
 const SESSION_MAX = 10
+const DIETARY_KEY = 'cravings_dietary'
 
 function randomId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
+}
+
+function loadDietaryFromStorage(): GuestPrefs {
+  try {
+    const raw = localStorage.getItem(DIETARY_KEY)
+    if (raw) return JSON.parse(raw) as GuestPrefs
+  } catch { /* ignore */ }
+  return { dietaryRestrictions: [], safetyOverrides: [] }
+}
+
+function saveDietaryToStorage(prefs: GuestPrefs): void {
+  localStorage.setItem(DIETARY_KEY, JSON.stringify(prefs))
 }
 
 function AppHeader({ user, onLogin, onRegister, onProfile, onLogout }: {
@@ -67,7 +84,7 @@ function SessionProgress({ count, total }: SessionProgressProps) {
   )
 }
 
-type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile'
+type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile' | 'privacy' | 'terms'
 
 export default function App() {
   const sessionId = useRef(randomId())
@@ -87,6 +104,9 @@ export default function App() {
   const [mood, setMood] = useState<MoodOption>('Any')
   const [dietary, setDietary] = useState<DietOption>('Standard')
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
+  const [guestDietary, setGuestDietary] = useState<GuestPrefs>(loadDietaryFromStorage)
+  const seenIds = useRef<number[]>([])
+  const [locationConsentPending, setLocationConsentPending] = useState<(() => void) | null>(null)
 
   const { requestLocation } = useLocation()
 
@@ -105,9 +125,21 @@ export default function App() {
     async function init() {
       try {
         await ensureUser()
-        const me = await getMe()
-        setCurrentUser(me)
-        setScreen('onboarding')
+        const token = localStorage.getItem('cravings_token')
+        if (token) {
+          const me = await getMe()
+          setCurrentUser(me)
+          if (!me.onboarding_complete) {
+            setScreen('onboarding')
+          } else {
+            setScreen('swipe')
+            await loadNextCard()
+          }
+        } else {
+          // Guest: go straight to onboarding, no DB row
+          setCurrentUser(null)
+          setScreen('onboarding')
+        }
         setLoading(false)
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e))
@@ -121,7 +153,10 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const recs = await getRecommendation(sessionId.current, moodToApi(mood), dietToApi(dietary))
+      const guestPrefs = currentUser === null
+        ? { ...guestDietary, excludedIds: seenIds.current }
+        : undefined
+      const recs = await getRecommendation(sessionId.current, moodToApi(mood), dietToApi(dietary), 1, guestPrefs)
       if (!recs || recs.length === 0) {
         setFood(null)
         setError('No more items available.')
@@ -136,18 +171,33 @@ export default function App() {
     }
   }
 
-  const handleOnboardingComplete = useCallback(async () => {
+  const handleOnboardingComplete = useCallback(async (dietary: GuestPrefs) => {
+    saveDietaryToStorage(dietary)
+    setGuestDietary(dietary)
+    if (currentUser?.is_registered) {
+      // Persist dietary restrictions to DB for registered users
+      try {
+        await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/users/me`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('cravings_token')}` },
+          body: JSON.stringify({ dietary_restrictions: dietary.dietaryRestrictions }),
+        })
+      } catch { /* non-fatal */ }
+    }
     setScreen('swipe')
     await loadNextCard()
-  }, [mood, dietary])
+  }, [mood, dietary, currentUser])
 
-  const handleOnboardingSkip = useCallback(async () => {
+  const handleOnboardingSkip = useCallback(async (dietary: GuestPrefs) => {
+    saveDietaryToStorage(dietary)
+    setGuestDietary(dietary)
     setScreen('swipe')
     await loadNextCard()
   }, [mood, dietary])
 
   async function handleNewSession() {
     sessionId.current = randomId()
+    seenIds.current = []
     setSwipeHistory([])
     setScreen('swipe')
     await loadNextCard()
@@ -159,7 +209,11 @@ export default function App() {
     const swipedFood = food
 
     try {
-      const result = await recordSwipe(swipedFood.id, direction, sessionId.current, swipedFood.snapshot_token)
+      const guestPrefs = currentUser === null ? guestDietary : undefined
+      if (currentUser === null) {
+        seenIds.current = [...seenIds.current, Number(swipedFood.id)]
+      }
+      const result = await recordSwipe(swipedFood.id, direction, sessionId.current, swipedFood.snapshot_token, guestPrefs)
 
       const newHistory = [...swipeHistory, { food: swipedFood, direction }]
       setSwipeHistory(newHistory)
@@ -175,17 +229,26 @@ export default function App() {
         setRateLimitedSeconds(null)
         setScreen('restaurants')
 
-        try {
-          const loc = await requestLocation()
-          const nearby = await getNearby(swipedFood.id, loc.lat, loc.lng)
-          setRestaurants(nearby)
-        } catch (err) {
-          if (err instanceof RateLimitError) {
-            setRateLimitedSeconds(err.retry_after)
-            setRestaurants([])
-          } else {
-            setRestaurants([])
+        const doNearby = async () => {
+          try {
+            const loc = await requestLocation()
+            const nearby = await getNearby(swipedFood.id, loc.lat, loc.lng)
+            setRestaurants(nearby)
+          } catch (err) {
+            if (err instanceof RateLimitError) {
+              setRateLimitedSeconds(err.retry_after)
+              setRestaurants([])
+            } else {
+              setRestaurants([])
+            }
           }
+        }
+
+        const hasConsent = localStorage.getItem(LOCATION_CONSENT_KEY)
+        if (hasConsent) {
+          await doNearby()
+        } else {
+          setLocationConsentPending(() => doNearby)
         }
       } else {
         await loadNextCard()
@@ -222,15 +285,11 @@ export default function App() {
   async function handleLogout() {
     await logout()
     setCurrentUser(null)
-    setScreen('swipe')
-    await ensureUser()
-    const me = await getMe()
-    setCurrentUser(me)
-    if (!me.onboarding_complete) {
-      setScreen('onboarding')
-    } else {
-      await loadNextCard()
-    }
+    seenIds.current = []
+    setSwipeHistory([])
+    sessionId.current = randomId()
+    setGuestDietary(loadDietaryFromStorage())
+    setScreen('onboarding')
   }
 
   if (loading && screen === 'swipe' && !food) {
@@ -249,13 +308,19 @@ export default function App() {
     onLogout: () => void handleLogout(),
   }
 
+  function openLegal(doc: 'privacy' | 'terms') {
+    setPrevScreen(screen)
+    setScreen(doc)
+  }
+
   return (
     <div className="app">
       <AppHeader {...authMenuProps} />
+      <ConsentBanner onOpenPrivacy={() => openLegal('privacy')} />
 
       {screen === 'login' && (
         <LoginForm
-          onSuccess={user => { setCurrentUser(user); navigateBack() }}
+          onSuccess={user => { setCurrentUser(user); navigateBack(); void loadNextCard() }}
           onSwitchToRegister={() => setScreen('register')}
           onBack={navigateBack}
         />
@@ -263,23 +328,38 @@ export default function App() {
 
       {screen === 'register' && (
         <RegisterForm
-          onSuccess={user => { setCurrentUser(user); navigateBack() }}
+          onSuccess={user => { setCurrentUser(user); navigateBack(); void loadNextCard() }}
           onSwitchToLogin={() => setScreen('login')}
           onBack={navigateBack}
           isGuest={currentUser !== null && !currentUser.is_registered}
+          onOpenTerms={() => openLegal('terms')}
+          onOpenPrivacy={() => openLegal('privacy')}
         />
       )}
 
       {screen === 'profile' && currentUser && (
-        <ProfilePage user={currentUser} onBack={navigateBack} />
+        <ProfilePage
+          user={currentUser}
+          onBack={navigateBack}
+          onDeleteAccount={() => {
+            setCurrentUser(null)
+            seenIds.current = []
+            setSwipeHistory([])
+            sessionId.current = randomId()
+            setGuestDietary(loadDietaryFromStorage())
+            setScreen('onboarding')
+          }}
+        />
       )}
 
       {screen === 'onboarding' && (
         <div className="card-enter" style={{ width: '100%' }}>
           <OnboardingScreen
-            onComplete={() => void handleOnboardingComplete()}
-            onSkip={() => void handleOnboardingSkip()}
+            onComplete={dietary => void handleOnboardingComplete(dietary)}
+            onSkip={dietary => void handleOnboardingSkip(dietary)}
             hasExistingProfile={currentUser?.onboarding_complete ?? false}
+            isRegistered={currentUser?.is_registered ?? false}
+            initialDietary={guestDietary}
           />
         </div>
       )}
@@ -339,6 +419,97 @@ export default function App() {
           </div>
         </div>
       )}
+
+      {(screen === 'privacy' || screen === 'terms') && (
+        <LegalPage doc={screen} onBack={navigateBack} />
+      )}
+
+      {/* Location consent overlay — shown before first nearby lookup */}
+      {locationConsentPending && (
+        <div style={{
+          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
+          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
+          zIndex: 8000, padding: '0 12px 24px',
+        }}>
+          <div style={{
+            width: '100%', maxWidth: 480, background: '#fff',
+            borderRadius: 20, padding: '24px 20px 20px',
+            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
+          }}>
+            <div style={{ textAlign: 'center', marginBottom: 16 }}>
+              <div style={{
+                width: 56, height: 56, borderRadius: '50%',
+                background: 'rgba(232,93,4,0.10)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 28, margin: '0 auto 12px',
+              }}>📍</div>
+              <h3 style={{ margin: '0 0 6px', fontSize: '1.1rem', fontWeight: 800, color: '#1A1A1A' }}>
+                Use your location?
+              </h3>
+              <p style={{ margin: '0 auto', maxWidth: 320, fontSize: '0.86rem', lineHeight: 1.55, color: '#6B6B6B' }}>
+                Cravings uses your approximate location to find nearby restaurants. We don't store
+                precise coordinates.{' '}
+                <button
+                  onClick={() => openLegal('privacy')}
+                  style={{ background: 'none', border: 'none', padding: 0, color: '#E85D04', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.86rem', textDecoration: 'underline', textUnderlineOffset: 2 }}
+                >
+                  Privacy Policy
+                </button>.
+              </p>
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <button
+                onClick={() => {
+                  localStorage.setItem(LOCATION_CONSENT_KEY, 'granted')
+                  const fn = locationConsentPending
+                  setLocationConsentPending(null)
+                  void fn()
+                }}
+                style={{
+                  width: '100%', padding: '13px', background: '#E85D04', color: '#fff',
+                  border: 'none', borderRadius: 100, fontSize: '0.95rem', fontWeight: 700,
+                  cursor: 'pointer', fontFamily: 'inherit',
+                  boxShadow: '0 4px 16px rgba(232,93,4,0.33)',
+                }}
+              >
+                Allow location
+              </button>
+              <button
+                onClick={() => {
+                  localStorage.setItem(LOCATION_CONSENT_KEY, 'denied')
+                  setLocationConsentPending(null)
+                  setRestaurants([])
+                }}
+                style={{
+                  width: '100%', padding: '11px', background: 'transparent',
+                  color: '#6B6B6B', border: 'none', borderRadius: 100,
+                  fontSize: '0.88rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
+                }}
+              >
+                Not now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <footer style={{
+        width: '100%', textAlign: 'center',
+        padding: '16px 20px 24px',
+        fontSize: '0.75rem', color: '#B0A89E',
+        display: 'flex', gap: 16, justifyContent: 'center', flexWrap: 'wrap',
+      }}>
+        <button onClick={() => openLegal('privacy')} style={footerLinkStyle}>Privacy Policy</button>
+        <button onClick={() => openLegal('terms')} style={footerLinkStyle}>Terms of Service</button>
+        <span>© {new Date().getFullYear()} Cravings</span>
+      </footer>
     </div>
   )
+}
+
+const footerLinkStyle: React.CSSProperties = {
+  background: 'none', border: 'none', padding: 0,
+  color: '#B0A89E', cursor: 'pointer', fontFamily: 'inherit',
+  fontSize: '0.75rem', textDecoration: 'underline', textUnderlineOffset: 2,
 }

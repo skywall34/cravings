@@ -124,6 +124,45 @@ def list_food_items(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def get_popular_food_items(
+    conn: sqlite3.Connection,
+    safety_mask: int,
+    dietary_restrictions: list[str],
+    exclude_ids: list[int] | None = None,
+    limit: int = 10,
+) -> list[dict]:
+    """Rank food items by aggregate right-swipe rate across all users. Guest recommendations."""
+    clauses = ["tagging_status = 'tagged'", "(safety_risk_bitmask & ?) = 0"]
+    args: list = [safety_mask]
+
+    diet_clauses, diet_args = build_dietary_filter_clauses(dietary_restrictions)
+    clauses.extend(diet_clauses)
+    args.extend(diet_args)
+
+    if exclude_ids:
+        placeholders = ",".join("?" * len(exclude_ids))
+        clauses.append(f"f.id NOT IN ({placeholders})")
+        args.extend(exclude_ids)
+
+    args.append(limit)
+    where = " AND ".join(clauses)
+    query = (
+        f"SELECT f.{_FOOD_ITEM_COLS.replace(', ', ', f.')}, "
+        "COALESCE("
+        "  SUM(CASE WHEN s.direction = 'right' THEN 1.0 ELSE 0.0 END)"
+        "  / NULLIF(COUNT(s.id), 0), 0.0"
+        ") AS popularity_score "
+        "FROM food_items f "
+        "LEFT JOIN swipe_events s ON s.food_item_id = f.id "
+        f"WHERE {where} "
+        "GROUP BY f.id "
+        "ORDER BY popularity_score DESC, RANDOM() "
+        "LIMIT ?"
+    )
+    rows = conn.execute(query, args).fetchall()
+    return [dict(r) for r in rows]
+
+
 def list_restaurants(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
         "SELECT id, name, COALESCE(location, '') as location, "

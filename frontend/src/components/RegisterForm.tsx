@@ -7,9 +7,11 @@ interface RegisterFormProps {
   onSwitchToLogin: () => void
   onBack: () => void
   isGuest: boolean
+  onOpenTerms?: () => void
+  onOpenPrivacy?: () => void
 }
 
-export function RegisterForm({ onSuccess, onSwitchToLogin, onBack, isGuest }: RegisterFormProps) {
+export function RegisterForm({ onSuccess, onSwitchToLogin, onBack, isGuest, onOpenTerms, onOpenPrivacy }: RegisterFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -98,6 +100,13 @@ export function RegisterForm({ onSuccess, onSwitchToLogin, onBack, isGuest }: Re
         <button type="submit" disabled={loading} style={submitStyle}>
           {loading ? 'Creating account…' : 'Create account'}
         </button>
+
+        <p style={{ textAlign: 'center', marginTop: 12, fontSize: '0.75rem', color: '#AAA', lineHeight: 1.5 }}>
+          By creating an account you agree to our{' '}
+          <button onClick={onOpenTerms} style={legalLinkStyle}>Terms of Service</button>
+          {' '}and{' '}
+          <button onClick={onOpenPrivacy} style={legalLinkStyle}>Privacy Policy</button>.
+        </p>
       </form>
 
       <p style={{ textAlign: 'center', marginTop: 20, fontSize: '0.85rem', color: '#888' }}>
@@ -130,6 +139,19 @@ const inputStyle: React.CSSProperties = {
   outline: 'none',
   boxSizing: 'border-box',
   background: '#FAFAF8',
+}
+
+const legalLinkStyle: React.CSSProperties = {
+  background: 'none',
+  border: 'none',
+  padding: 0,
+  color: '#E85D04',
+  fontWeight: 600,
+  cursor: 'pointer',
+  fontFamily: 'inherit',
+  fontSize: '0.75rem',
+  textDecoration: 'underline',
+  textUnderlineOffset: 2,
 }
 
 const submitStyle: React.CSSProperties = {

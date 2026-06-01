@@ -5,6 +5,7 @@ import logging
 import mimetypes
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 
 # python:3.12-slim ships without /etc/mime.types — register webp explicitly
@@ -14,6 +15,7 @@ mimetypes.add_type("image/webp", ".webp")
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security.http import HTTPBearer as _OptionalBearer
 from fastapi.staticfiles import StaticFiles
@@ -81,6 +83,16 @@ async def _image_cache_headers(request: Request, call_next):
     return response
 
 
+@app.middleware("http")
+async def _log_errors(request: Request, call_next):
+    import traceback
+    try:
+        return await call_next(request)
+    except Exception:
+        logger.error("Unhandled exception on %s %s:\n%s", request.method, request.url, traceback.format_exc())
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Dependencies
 # ---------------------------------------------------------------------------
@@ -117,24 +129,6 @@ async def _get_user(
 async def health():
     return {"status": "ok"}
 
-
-@app.post("/api/users", status_code=201)
-async def create_user(body: dict, conn=Depends(_get_conn)):
-    name = (body.get("name") or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="name required")
-    dietary = body.get("dietary_restrictions") or []
-    overrides = body.get("safety_overrides") or []
-    diet_mask = safety.compute_dietary_bitmask(dietary)
-    safety_mask = safety.compute_safety_bitmask(overrides)
-    user_id, token = db.insert_user(conn, name, diet_mask, safety_mask)
-    return {
-        "id": user_id,
-        "name": name,
-        "api_token": token,
-        "dietary_restrictions": safety.dietary_list_from_bitmask(diet_mask),
-        "safety_overrides": safety.safety_list_from_bitmask(safety_mask),
-    }
 
 
 @app.get("/api/users/me")
@@ -183,6 +177,44 @@ async def patch_me(body: dict, user=Depends(_get_user), conn=Depends(_get_conn))
     }
 
 
+@app.delete("/api/users/me", status_code=204)
+async def delete_me(user=Depends(_get_user), conn=Depends(_get_conn)):
+    """GDPR Art. 17 — right to erasure. Deletes all user data immediately."""
+    user_id = user["id"]
+    db.delete_swipes_for_user(conn, user_id)
+    db.delete_impressions_for_user(conn, user_id)
+    db.delete_user(conn, user_id)
+    conn.commit()
+
+
+@app.get("/api/users/me/export")
+async def export_me(user=Depends(_get_user), conn=Depends(_get_conn)):
+    """GDPR Art. 20 — data portability. Returns all stored user data as JSON."""
+    swipes = db.get_all_swipes_for_user(conn, user["id"])
+    payload = {
+        "account": {
+            "name": user["name"],
+            "email": user["email"],
+            "created_at": user["created_at"],
+        },
+        "preferences": {
+            "dietary_restrictions": safety.dietary_list_from_bitmask(user["dietary_flags_bitmask"]),
+            "safety_overrides": safety.safety_list_from_bitmask(user["safety_overrides_bitmask"]),
+            "onboarding_complete": bool(user["onboarding_complete"]),
+        },
+        "swipe_history": swipes,
+        "stats": {
+            "total_swipes": user["total_swipes"],
+            "drift_active": bool(user["drift_active"]),
+        },
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+    }
+    return JSONResponse(
+        content=payload,
+        headers={"Content-Disposition": 'attachment; filename="cravings-data.json"'},
+    )
+
+
 @app.post("/api/onboarding")
 async def onboarding(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
     prefs = body.get("preferences") or {}
@@ -200,28 +232,51 @@ async def recommend(
     top_n: int = Query(default=1, ge=1),
     session_id: str = Query(default=""),
     hour: float | None = Query(default=None),
-    user=Depends(_get_user),
+    dietary_restrictions: list[str] = Query(default=[]),
+    safety_overrides: list[str] = Query(default=[]),
+    excluded_ids: list[int] = Query(default=[]),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
     conn=Depends(_get_conn),
 ):
-    snapshot, candidates = await swipe.build_intake(
-        conn, _sessions, user, dietary_mode, mood, hour, session_id
+    user = None
+    if credentials:
+        user = db.get_user_by_token(conn, credentials.credentials)
+
+    if user is not None:
+        # Registered path: Thompson model personalization
+        snapshot, candidates = await swipe.build_intake(
+            conn, _sessions, user, dietary_mode, mood, hour, session_id
+        )
+        if not candidates:
+            raise HTTPException(status_code=404, detail="no eligible food items")
+        swiped_cuisines = db.get_swiped_cuisines(conn, user["id"])
+        results = await asyncio.to_thread(
+            _model_service.recommend, user["id"], candidates, snapshot.to_context(), top_n,
+            swiped_cuisines,
+        )
+        if not results:
+            raise HTTPException(status_code=404, detail="no eligible food items")
+        return swipe.shape_results(results, candidates, snapshot, _base_path)
+
+    # Guest path: global popularity ranking, no DB writes
+    snapshot, candidates = await swipe.build_guest_intake(
+        conn, _sessions, session_id, dietary_restrictions, safety_overrides,
+        dietary_mode, mood, hour, top_n, extra_excluded=excluded_ids,
     )
     if not candidates:
         raise HTTPException(status_code=404, detail="no eligible food items")
-
-    swiped_cuisines = db.get_swiped_cuisines(conn, user["id"])
-    results = await asyncio.to_thread(
-        _model_service.recommend, user["id"], candidates, snapshot.to_context(), top_n,
-        swiped_cuisines,
-    )
-    if not results:
-        raise HTTPException(status_code=404, detail="no eligible food items")
-
+    top = candidates[:top_n]
+    results = [{"id": c["id"], "name": c["name"], "score": 0.0, "rank": i + 1}
+               for i, c in enumerate(top)]
     return swipe.shape_results(results, candidates, snapshot, _base_path)
 
 
 @app.post("/api/swipe")
-async def swipe_endpoint(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
+async def swipe_endpoint(
+    body: dict,
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+    conn=Depends(_get_conn),
+):
     food_item_id = body.get("food_item_id")
     direction = body.get("direction")
     session_id = body.get("session_id") or ""
@@ -231,21 +286,35 @@ async def swipe_endpoint(body: dict, user=Depends(_get_user), conn=Depends(_get_
     if item is None:
         raise HTTPException(status_code=404, detail="food item not found")
 
+    user = None
+    if credentials:
+        user = db.get_user_by_token(conn, credentials.credentials)
+
+    if user is not None:
+        # Registered path: full model update + DB write
+        try:
+            snapshot = swipe.verify(token, user["id"])
+        except swipe.SnapshotError as e:
+            raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
+        try:
+            total_swipes = await swipe.record_swipe(
+                conn, _model_service, _sessions, user, item, snapshot, direction, session_id
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e)) from e
+        seen_count = await _sessions.count(session_id)
+        session_complete = seen_count >= _session_max_swipes
+        return {"success": True, "total_swipes": total_swipes, "session_complete": session_complete}
+
+    # Guest path: verify session binding, mark seen, no DB write
     try:
-        snapshot = swipe.verify(token, user["id"])
+        swipe.verify_guest(token, session_id)
     except swipe.SnapshotError as e:
         raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
-
-    try:
-        total_swipes = await swipe.record_swipe(
-            conn, _model_service, _sessions, user, item, snapshot, direction, session_id
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-
+    await _sessions.mark(session_id, food_item_id)
     seen_count = await _sessions.count(session_id)
     session_complete = seen_count >= _session_max_swipes
-    return {"success": True, "total_swipes": total_swipes, "session_complete": session_complete}
+    return {"success": True, "total_swipes": 0, "session_complete": session_complete}
 
 
 @app.post("/api/session/reset")
@@ -284,18 +353,21 @@ async def nearby(
     food_item_id: int = Query(...),
     lat: float = Query(...),
     lng: float = Query(...),
-    user=Depends(_get_user),
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
     conn=Depends(_get_conn),
 ):
     item = db.get_food_item(conn, food_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="food item not found")
 
+    user = db.get_user_by_token(conn, credentials.credentials) if credentials else None
+    rate_key = f"user:{user['id']}" if user else f"ip:{lat:.2f},{lng:.2f}"
+
     if _places.api_key:
-        allowed, retry_after = await _nearby_limiter.consume(f"user:{user['id']}")
+        allowed, retry_after = await _nearby_limiter.consume(rate_key)
         if not allowed:
             retry_int = max(1, int(retry_after))
-            logger.warning("nearby rate limited user=%d retry_after=%s", user["id"], retry_int)
+            logger.warning("nearby rate limited key=%s retry_after=%s", rate_key, retry_int)
             raise HTTPException(
                 status_code=429,
                 detail={"detail": "rate limited", "retry_after": retry_int},
@@ -304,6 +376,7 @@ async def nearby(
 
     fallback = f"{item['cuisine_type'] or ''} restaurant".strip()
     try:
+        # lat/lng not stored — used only for this Places API call (privacy policy commitment)
         return await _places.search(item["name"], fallback, lat, lng)
     except PlacesError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
@@ -321,38 +394,20 @@ def _validate_email(raw: str) -> str:
 
 
 @app.post("/api/auth/register", status_code=201)
-async def auth_register(
-    body: dict,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
-    conn=Depends(_get_conn),
-):
+async def auth_register(body: dict, conn=Depends(_get_conn)):
     email = _validate_email((body.get("email") or "").strip())
     password = (body.get("password") or "").strip()
     name = (body.get("name") or "").strip()
     if not password or len(password) < 8:
         raise HTTPException(status_code=400, detail="password must be at least 8 characters")
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
 
     existing = db.get_user_by_email(conn, email)
     if existing:
         raise HTTPException(status_code=409, detail="email already registered, please log in")
 
     password_hash = db.hash_password(password)
-
-    if credentials:
-        guest = db.get_user_by_token(conn, credentials.credentials)
-        if guest and guest["email"] is None:
-            db.attach_credentials(conn, guest["id"], email, password_hash)
-            return {
-                "id": guest["id"],
-                "name": guest["name"],
-                "email": email,
-                "api_token": credentials.credentials,
-                "is_registered": True,
-                "onboarding_complete": bool(guest["onboarding_complete"]),
-            }
-
-    if not name:
-        raise HTTPException(status_code=400, detail="name required for new registration")
     user_id, token = db.create_registered_user(conn, email, password_hash, name)
     return {
         "id": user_id,

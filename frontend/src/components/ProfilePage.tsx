@@ -1,17 +1,22 @@
 import { useState, useEffect } from 'react'
-import { fetchStats, changePassword } from '../api'
+import { fetchStats, changePassword, deleteAccount, exportData } from '../api'
 import type { UserInfo, SwipeStats } from '../api'
 
 interface ProfilePageProps {
   user: UserInfo
   onBack: () => void
+  onDeleteAccount?: () => void
 }
 
-export function ProfilePage({ user, onBack }: ProfilePageProps) {
+export function ProfilePage({ user, onBack, onDeleteAccount }: ProfilePageProps) {
   const [stats, setStats] = useState<SwipeStats | null>(null)
   const [loadingStats, setLoadingStats] = useState(true)
   const [statsError, setStatsError] = useState<string | null>(null)
   const [showPasswordForm, setShowPasswordForm] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState(false)
+  const [deleteLoading, setDeleteLoading] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [exportLoading, setExportLoading] = useState(false)
 
   useEffect(() => {
     fetchStats()
@@ -97,6 +102,67 @@ export function ProfilePage({ user, onBack }: ProfilePageProps) {
       ) : (
         <ChangePasswordForm onDone={() => setShowPasswordForm(false)} />
       )}
+
+      <Section title="Your Data">
+        <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button
+            disabled={exportLoading}
+            onClick={async () => {
+              setExportLoading(true)
+              try {
+                const blob = await exportData()
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = 'cravings-data.json'
+                a.click()
+                URL.revokeObjectURL(url)
+              } catch (e) {
+                alert(e instanceof Error ? e.message : 'Export failed')
+              } finally {
+                setExportLoading(false)
+              }
+            }}
+            style={secondaryBtnStyle}
+          >
+            {exportLoading ? 'Exporting…' : 'Export my data (JSON)'}
+          </button>
+
+          {!deleteConfirm ? (
+            <button onClick={() => setDeleteConfirm(true)} style={dangerBtnStyle}>
+              Delete my account
+            </button>
+          ) : (
+            <div style={{ padding: '12px', background: '#FFF5F5', border: '1px solid #FCA5A5', borderRadius: 8 }}>
+              <p style={{ margin: '0 0 10px', fontSize: '0.85rem', color: '#B91C1C', fontWeight: 600 }}>
+                This will permanently delete your account and swipe history. This cannot be undone.
+              </p>
+              {deleteError && <p style={{ color: '#C0392B', fontSize: '0.82rem', margin: '0 0 8px' }}>{deleteError}</p>}
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button
+                  disabled={deleteLoading}
+                  onClick={async () => {
+                    setDeleteLoading(true)
+                    setDeleteError(null)
+                    try {
+                      await deleteAccount()
+                      localStorage.removeItem('cravings_token')
+                      onDeleteAccount?.()
+                    } catch (e) {
+                      setDeleteError(e instanceof Error ? e.message : 'Deletion failed')
+                      setDeleteLoading(false)
+                    }
+                  }}
+                  style={{ ...submitMiniStyle, background: '#DC2626' }}
+                >
+                  {deleteLoading ? 'Deleting…' : 'Yes, delete'}
+                </button>
+                <button onClick={() => setDeleteConfirm(false)} style={secondaryBtnStyle}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      </Section>
     </div>
   )
 }
@@ -219,6 +285,16 @@ const secondaryBtnStyle: React.CSSProperties = {
   fontSize: '0.88rem',
   cursor: 'pointer',
   color: '#555',
+}
+
+const dangerBtnStyle: React.CSSProperties = {
+  background: 'none',
+  border: '1.5px solid #FCA5A5',
+  borderRadius: 8,
+  padding: '9px 16px',
+  fontSize: '0.88rem',
+  cursor: 'pointer',
+  color: '#DC2626',
 }
 
 const miniInputStyle: React.CSSProperties = {

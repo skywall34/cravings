@@ -72,7 +72,14 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
     recoverFromInvalidToken()
     throw new Error('session expired, reloading')
   }
-  const data: unknown = await res.json()
+  if (res.status === 204) return undefined as T
+  let data: unknown = null
+  try {
+    data = await res.json()
+  } catch {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return undefined as T
+  }
   if (res.status === 429) {
     const headerRetry = Number(res.headers.get('Retry-After')) || 0
     let bodyRetry = 0
@@ -116,9 +123,8 @@ export interface SwipeStats {
 }
 
 export async function ensureUser(): Promise<void> {
+  // No-op for guests — DB row created only on registration
   if (getToken()) return
-  const data = await request<{ api_token: string }>('POST', '/api/users', { name: 'guest' })
-  setToken(data.api_token)
 }
 
 export async function getMe(): Promise<UserInfo> {
@@ -164,6 +170,12 @@ export async function logout(): Promise<void> {
   }
 }
 
+export interface GuestPrefs {
+  dietaryRestrictions: string[]
+  safetyOverrides: string[]
+  excludedIds?: number[]
+}
+
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
   const result = await request<{ api_token: string }>('POST', '/api/auth/password', {
     old_password: oldPassword,
@@ -185,6 +197,7 @@ export async function getRecommendation(
   mood = 'no_preference',
   dietaryMode = 'standard',
   topN = 1,
+  guestPrefs?: GuestPrefs,
 ): Promise<FoodItem[]> {
   const params = new URLSearchParams({
     session_id: sessionId,
@@ -192,6 +205,11 @@ export async function getRecommendation(
     dietary_mode: dietaryMode,
     top_n: String(topN),
   })
+  if (guestPrefs) {
+    guestPrefs.dietaryRestrictions.forEach(r => params.append('dietary_restrictions', r))
+    guestPrefs.safetyOverrides.forEach(o => params.append('safety_overrides', o))
+    ;(guestPrefs.excludedIds ?? []).forEach(id => params.append('excluded_ids', String(id)))
+  }
   return request<FoodItem[]>('GET', `/api/recommend?${params}`)
 }
 
@@ -206,12 +224,17 @@ export async function recordSwipe(
   direction: SwipeDirection,
   sessionId: string,
   snapshotToken: string,
+  guestPrefs?: GuestPrefs,
 ): Promise<SwipeResult> {
   return request<SwipeResult>('POST', '/api/swipe', {
     food_item_id: foodItemId,
     direction,
     session_id: sessionId,
     snapshot_token: snapshotToken,
+    ...(guestPrefs ? {
+      dietary_restrictions: guestPrefs.dietaryRestrictions,
+      safety_overrides: guestPrefs.safetyOverrides,
+    } : {}),
   })
 }
 
@@ -226,4 +249,18 @@ export async function getNearby(foodItemId: string, lat: number, lng: number): P
 
 export async function resetSession(sessionId: string): Promise<void> {
   return request('POST', '/api/session/reset', { session_id: sessionId })
+}
+
+export async function deleteAccount(): Promise<void> {
+  return request('DELETE', '/api/users/me')
+}
+
+export async function exportData(): Promise<Blob> {
+  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
+  const token = localStorage.getItem('cravings_token')
+  const res = await fetch(`${base}/api/users/me/export`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new Error(`Export failed: ${res.status}`)
+  return res.blob()
 }
