@@ -174,6 +174,7 @@ export interface GuestPrefs {
   dietaryRestrictions: string[]
   safetyOverrides: string[]
   excludedIds?: number[]
+  tastePrefs?: Record<string, number>
 }
 
 export async function changePassword(oldPassword: string, newPassword: string): Promise<void> {
@@ -209,6 +210,7 @@ export async function getRecommendation(
     guestPrefs.dietaryRestrictions.forEach(r => params.append('dietary_restrictions', r))
     guestPrefs.safetyOverrides.forEach(o => params.append('safety_overrides', o))
     ;(guestPrefs.excludedIds ?? []).forEach(id => params.append('excluded_ids', String(id)))
+    Object.entries(guestPrefs.tastePrefs ?? {}).forEach(([k, v]) => params.set('pref_' + k, String(v)))
   }
   return request<FoodItem[]>('GET', `/api/recommend?${params}`)
 }
@@ -234,6 +236,7 @@ export async function recordSwipe(
     ...(guestPrefs ? {
       dietary_restrictions: guestPrefs.dietaryRestrictions,
       safety_overrides: guestPrefs.safetyOverrides,
+      taste_prefs: guestPrefs.tastePrefs ?? {},
     } : {}),
   })
 }

@@ -33,7 +33,7 @@ function loadDietaryFromStorage(): GuestPrefs {
     const raw = localStorage.getItem(DIETARY_KEY)
     if (raw) return JSON.parse(raw) as GuestPrefs
   } catch { /* ignore */ }
-  return { dietaryRestrictions: [], safetyOverrides: [] }
+  return { dietaryRestrictions: [], safetyOverrides: [], tastePrefs: {} }
 }
 
 function saveDietaryToStorage(prefs: GuestPrefs): void {

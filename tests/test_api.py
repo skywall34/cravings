@@ -592,3 +592,81 @@ async def test_recommend_returns_null_url_for_needs_review(auth_client):
     # needs_review images are now served (manual review is optional, not a gate)
     assert item.get("image_url_400") is not None
     assert "mystery" in item["image_url_400"]
+
+
+# ---------------------------------------------------------------------------
+# Guest taste preferences (T1–T3, T6)
+# ---------------------------------------------------------------------------
+
+async def test_guest_recommend_with_taste_prefs_returns_nonzero_score(client):
+    """T1: Guest recommend with taste prefs seeds a session model → score > 0."""
+    _insert_food_item(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=g_prefs&pref_spice_level=0.9&pref_sweetness=0.2")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert len(data) >= 1
+    assert data[0]["score"] > 0.0
+
+
+async def test_guest_recommend_without_prefs_returns_zero_score(client):
+    """T1 (control): Guest recommend without taste prefs uses fallback path → score == 0."""
+    _insert_food_item(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=g_nopref")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data[0]["score"] == 0.0
+
+
+async def test_guest_swipe_with_taste_prefs_updates_model(client):
+    """T2: Right-swipe on a guest session with taste prefs succeeds without error."""
+    _insert_food_item(TEST_DB)
+    rec = await client.get("/api/recommend?session_id=g_sw&pref_spice_level=0.8")
+    assert rec.status_code == 200
+    item = rec.json()[0]
+    resp = await client.post("/api/swipe", json={
+        "food_item_id": item["id"],
+        "direction": "right",
+        "session_id": "g_sw",
+        "snapshot_token": item["snapshot_token"],
+        "taste_prefs": {"spice_level": 0.8},
+    })
+    assert resp.status_code == 200
+    assert resp.json()["total_swipes"] == 0  # no DB write for guests
+
+
+async def test_guest_swipe_no_db_rows(client):
+    """T3: Guest session creates no rows in users or swipe_events."""
+    _insert_food_item(TEST_DB)
+    rec = await client.get("/api/recommend?session_id=g_norow&pref_sweetness=0.5")
+    assert rec.status_code == 200
+    item = rec.json()[0]
+    await client.post("/api/swipe", json={
+        "food_item_id": item["id"],
+        "direction": "left",
+        "session_id": "g_norow",
+        "snapshot_token": item["snapshot_token"],
+        "taste_prefs": {"sweetness": 0.5},
+    })
+    conn = sqlite3.connect(TEST_DB)
+    user_count = conn.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    swipe_count = conn.execute("SELECT COUNT(*) FROM swipe_events").fetchone()[0]
+    conn.close()
+    assert user_count == 0
+    assert swipe_count == 0
+
+
+async def test_registered_user_recommend_with_pref_params_unaffected(auth_client):
+    """T6: Registered path ignores pref_* params; swipe count increments normally."""
+    client, _, _ = auth_client
+    _insert_food_item(TEST_DB)
+    resp = await client.get("/api/recommend?session_id=r1&pref_spice_level=0.9")
+    assert resp.status_code == 200
+    item = resp.json()[0]
+    swipe = await client.post("/api/swipe", json={
+        "food_item_id": item["id"],
+        "direction": "right",
+        "session_id": "r1",
+        "snapshot_token": item["snapshot_token"],
+    })
+    assert swipe.status_code == 200
+    assert swipe.json()["total_swipes"] == 1

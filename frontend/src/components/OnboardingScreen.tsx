@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { postOnboarding } from '../api'
+import type { GuestPrefs } from '../api'
 
 const PREFS = [
   { key: 'spice',    label: 'Spice',    emoji: '🌶️', lo: 'Mild',   hi: 'Fiery'   },
@@ -10,6 +11,19 @@ const PREFS = [
 ] as const
 
 type PrefKey = (typeof PREFS)[number]['key']
+
+const DIETARY_OPTIONS: { key: string; label: string }[] = [
+  { key: 'vegetarian',       label: 'Vegetarian' },
+  { key: 'vegan',            label: 'Vegan' },
+  { key: 'gluten_free',      label: 'Gluten-free' },
+  { key: 'dairy_free',       label: 'Dairy-free' },
+  { key: 'halal',            label: 'Halal' },
+  { key: 'kosher',           label: 'Kosher' },
+  { key: 'contains_nuts',    label: 'No nuts' },
+  { key: 'contains_shellfish', label: 'No shellfish' },
+  { key: 'contains_soy',    label: 'No soy' },
+  { key: 'contains_eggs',   label: 'No eggs' },
+]
 
 interface PrefSliderProps {
   emoji: string
@@ -61,15 +75,26 @@ function PrefSlider({ emoji, label, lo, hi, value, onChange }: PrefSliderProps) 
 }
 
 interface OnboardingScreenProps {
-  onComplete: () => void
-  onSkip: () => void
+  onComplete: (dietary: GuestPrefs) => void
+  onSkip: (dietary: GuestPrefs) => void
   hasExistingProfile?: boolean
+  isRegistered?: boolean
+  initialDietary?: GuestPrefs
 }
 
-export function OnboardingScreen({ onComplete, onSkip, hasExistingProfile = false }: OnboardingScreenProps) {
+export function OnboardingScreen({
+  onComplete,
+  onSkip,
+  hasExistingProfile = false,
+  isRegistered = false,
+  initialDietary,
+}: OnboardingScreenProps) {
   const [prefs, setPrefs] = useState<Record<PrefKey, number>>({
     spice: 0, sweet: 0, sour: 0, texture: 0, richness: 0,
   })
+  const [dietaryRestrictions, setDietaryRestrictions] = useState<Set<string>>(
+    new Set(initialDietary?.dietaryRestrictions ?? [])
+  )
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -100,21 +125,47 @@ export function OnboardingScreen({ onComplete, onSkip, hasExistingProfile = fals
     setPrefs(p => ({ ...p, [key]: val }))
   }
 
+  const toggleDietary = (key: string) => {
+    setDietaryRestrictions(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const PREF_KEY_MAP: Record<string, string> = {
+    spice: 'spice_level',
+    sweet: 'sweetness',
+    sour: 'sourness',
+    texture: 'texture_softness',
+    richness: 'richness',
+  }
+
+  const guestPrefs: GuestPrefs = {
+    dietaryRestrictions: Array.from(dietaryRestrictions),
+    safetyOverrides: [],
+    tastePrefs: Object.fromEntries(
+      Object.entries(prefs).map(([k, v]) => [PREF_KEY_MAP[k] ?? k, v])
+    ),
+  }
+
   const handleStart = async () => {
     setSaving(true)
     try {
-      await postOnboarding(prefs)
+      if (isRegistered) {
+        await postOnboarding(prefs)
+      }
     } catch {
       // non-fatal — still proceed
     } finally {
       setSaving(false)
-      onComplete()
+      onComplete(guestPrefs)
     }
   }
 
   return (
     <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-      {/* Tagline */}
       <div style={{ padding: '16px 0 20px', textAlign: 'center' }}>
         <p style={{ fontSize: '0.95rem', color: '#6B6B6B', lineHeight: 1.6, margin: 0 }}>
           {hasExistingProfile
@@ -123,31 +174,63 @@ export function OnboardingScreen({ onComplete, onSkip, hasExistingProfile = fals
         </p>
       </div>
 
-      {/* Card */}
       <div style={{
         width: '100%', background: '#FFFFFF', borderRadius: 24,
         boxShadow: '0 8px 40px rgba(232, 93, 4, 0.12), 0 2px 8px rgba(0,0,0,0.06)',
-        padding: '28px 28px 24px', display: 'flex', flexDirection: 'column', gap: 20,
+        padding: '28px 28px 24px', display: 'flex', flexDirection: 'column', gap: 24,
       }}>
-        <h2 style={{ fontSize: '1.15rem', fontWeight: 800, color: '#1A1A1A', margin: 0 }}>
-          Your taste profile
-        </h2>
-        <p style={{ fontSize: '0.82rem', color: '#B0A89E', margin: '-12px 0 0', lineHeight: 1.5 }}>
-          Drag sliders to set your preferences. Everything can change as you swipe.
-        </p>
+        {/* Dietary restrictions */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#1A1A1A', margin: 0 }}>
+            Dietary restrictions
+          </h2>
+          <p style={{ fontSize: '0.82rem', color: '#B0A89E', margin: '-4px 0 0', lineHeight: 1.5 }}>
+            We'll filter out items that don't fit.
+          </p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {DIETARY_OPTIONS.map(opt => {
+              const active = dietaryRestrictions.has(opt.key)
+              return (
+                <button
+                  key={opt.key}
+                  onClick={() => toggleDietary(opt.key)}
+                  style={{
+                    padding: '6px 14px', borderRadius: 100, fontSize: '0.8rem', fontWeight: 600,
+                    border: active ? '2px solid #E85D04' : '2px solid #E8E0D8',
+                    background: active ? 'rgba(232,93,4,0.08)' : '#FAFAF9',
+                    color: active ? '#E85D04' : '#6B6B6B',
+                    cursor: 'pointer', fontFamily: 'inherit',
+                    transition: 'all 0.15s ease',
+                  }}
+                >
+                  {opt.label}
+                </button>
+              )
+            })}
+          </div>
+        </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
-          {PREFS.map(pref => (
-            <PrefSlider
-              key={pref.key}
-              emoji={pref.emoji}
-              label={pref.label}
-              lo={pref.lo}
-              hi={pref.hi}
-              value={prefs[pref.key]}
-              onChange={val => handleChange(pref.key, val)}
-            />
-          ))}
+        {/* Taste sliders */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          <h2 style={{ fontSize: '1.05rem', fontWeight: 800, color: '#1A1A1A', margin: 0 }}>
+            Your taste profile
+          </h2>
+          <p style={{ fontSize: '0.82rem', color: '#B0A89E', margin: '-4px 0 0', lineHeight: 1.5 }}>
+            Drag sliders to set your preferences. Everything can change as you swipe.
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+            {PREFS.map(pref => (
+              <PrefSlider
+                key={pref.key}
+                emoji={pref.emoji}
+                label={pref.label}
+                lo={pref.lo}
+                hi={pref.hi}
+                value={prefs[pref.key]}
+                onChange={val => handleChange(pref.key, val)}
+              />
+            ))}
+          </div>
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, paddingTop: 4 }}>
@@ -173,7 +256,7 @@ export function OnboardingScreen({ onComplete, onSkip, hasExistingProfile = fals
               color: '#B0A89E', cursor: 'pointer', letterSpacing: '0.03em',
               transition: 'color 0.15s ease', padding: '4px 8px', fontFamily: 'inherit',
             }}
-            onClick={onSkip}
+            onClick={() => onSkip(guestPrefs)}
             onMouseEnter={e => { e.currentTarget.style.color = '#E85D04' }}
             onMouseLeave={e => { e.currentTarget.style.color = '#B0A89E' }}
           >
