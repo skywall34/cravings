@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react'
+import * as storage from '../storage'
 
 const CONSENT_KEY = 'cravings_consent'
 
@@ -10,16 +11,17 @@ export function ConsentBanner({ onOpenPrivacy }: ConsentBannerProps) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
-    let stored: string | null = null
-    try { stored = localStorage.getItem(CONSENT_KEY) } catch { /* ignore */ }
-    if (!stored) {
-      const t = setTimeout(() => setVisible(true), 600)
-      return () => clearTimeout(t)
-    }
+    let cancelled = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    void storage.get(CONSENT_KEY).then(stored => {
+      if (cancelled || stored) return
+      timer = setTimeout(() => setVisible(true), 600)
+    })
+    return () => { cancelled = true; if (timer) clearTimeout(timer) }
   }, [])
 
   function decide(choice: 'all' | 'essential') {
-    try { localStorage.setItem(CONSENT_KEY, choice) } catch { /* ignore */ }
+    void storage.set(CONSENT_KEY, choice)
     setVisible(false)
   }
 

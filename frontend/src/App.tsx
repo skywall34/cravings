@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout, RateLimitError } from './api'
+import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
+import * as storage from './storage'
 import { useLocation } from './hooks/useLocation'
 import { SwipeCard } from './components/SwipeCard'
 import type { SwipeCardHandle } from './components/SwipeCard'
@@ -28,16 +29,18 @@ function randomId(): string {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
-function loadDietaryFromStorage(): GuestPrefs {
+const EMPTY_DIETARY: GuestPrefs = { dietaryRestrictions: [], safetyOverrides: [], tastePrefs: {} }
+
+async function loadDietaryFromStorage(): Promise<GuestPrefs> {
   try {
-    const raw = localStorage.getItem(DIETARY_KEY)
+    const raw = await storage.get(DIETARY_KEY)
     if (raw) return JSON.parse(raw) as GuestPrefs
   } catch { /* ignore */ }
-  return { dietaryRestrictions: [], safetyOverrides: [], tastePrefs: {} }
+  return EMPTY_DIETARY
 }
 
-function saveDietaryToStorage(prefs: GuestPrefs): void {
-  localStorage.setItem(DIETARY_KEY, JSON.stringify(prefs))
+async function saveDietaryToStorage(prefs: GuestPrefs): Promise<void> {
+  await storage.set(DIETARY_KEY, JSON.stringify(prefs))
 }
 
 function AppHeader({ user, onLogin, onRegister, onProfile, onLogout }: {
@@ -104,7 +107,7 @@ export default function App() {
   const [mood, setMood] = useState<MoodOption>('Any')
   const [dietary, setDietary] = useState<DietOption>('Standard')
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
-  const [guestDietary, setGuestDietary] = useState<GuestPrefs>(loadDietaryFromStorage)
+  const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
   const seenIds = useRef<number[]>([])
   const [locationConsentPending, setLocationConsentPending] = useState<(() => void) | null>(null)
 
@@ -122,10 +125,24 @@ export default function App() {
   const swipeCount = swipeHistory.length
 
   useEffect(() => {
+    // Route a server 401 (expired/invalid token) back to onboarding instead of
+    // window.location.reload(), which is a no-op inside the Capacitor WebView.
+    setSessionExpiredHandler(() => {
+      setCurrentUser(null)
+      seenIds.current = []
+      setSwipeHistory([])
+      sessionId.current = randomId()
+      setScreen('onboarding')
+    })
+  }, [])
+
+  useEffect(() => {
     async function init() {
       try {
+        const storedDietary = await loadDietaryFromStorage()
+        setGuestDietary(storedDietary)
         await ensureUser()
-        const token = localStorage.getItem('cravings_token')
+        const token = await getToken()
         if (token) {
           const me = await getMe()
           setCurrentUser(me)
@@ -172,16 +189,12 @@ export default function App() {
   }
 
   const handleOnboardingComplete = useCallback(async (dietary: GuestPrefs) => {
-    saveDietaryToStorage(dietary)
+    await saveDietaryToStorage(dietary)
     setGuestDietary(dietary)
     if (currentUser?.is_registered) {
       // Persist dietary restrictions to DB for registered users
       try {
-        await fetch(`${import.meta.env.BASE_URL.replace(/\/$/, '')}/api/users/me`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('cravings_token')}` },
-          body: JSON.stringify({ dietary_restrictions: dietary.dietaryRestrictions }),
-        })
+        await patchDietaryRestrictions(dietary.dietaryRestrictions)
       } catch { /* non-fatal */ }
     }
     setScreen('swipe')
@@ -189,7 +202,7 @@ export default function App() {
   }, [mood, dietary, currentUser])
 
   const handleOnboardingSkip = useCallback(async (dietary: GuestPrefs) => {
-    saveDietaryToStorage(dietary)
+    await saveDietaryToStorage(dietary)
     setGuestDietary(dietary)
     setScreen('swipe')
     await loadNextCard()
@@ -244,7 +257,7 @@ export default function App() {
           }
         }
 
-        const hasConsent = localStorage.getItem(LOCATION_CONSENT_KEY)
+        const hasConsent = await storage.get(LOCATION_CONSENT_KEY)
         if (hasConsent) {
           await doNearby()
         } else {
@@ -288,7 +301,7 @@ export default function App() {
     seenIds.current = []
     setSwipeHistory([])
     sessionId.current = randomId()
-    setGuestDietary(loadDietaryFromStorage())
+    setGuestDietary(await loadDietaryFromStorage())
     setScreen('onboarding')
   }
 
@@ -346,7 +359,7 @@ export default function App() {
             seenIds.current = []
             setSwipeHistory([])
             sessionId.current = randomId()
-            setGuestDietary(loadDietaryFromStorage())
+            setGuestDietary(EMPTY_DIETARY)
             setScreen('onboarding')
           }}
         />
@@ -460,7 +473,7 @@ export default function App() {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <button
                 onClick={() => {
-                  localStorage.setItem(LOCATION_CONSENT_KEY, 'granted')
+                  void storage.set(LOCATION_CONSENT_KEY, 'granted')
                   const fn = locationConsentPending
                   setLocationConsentPending(null)
                   void fn()
@@ -476,7 +489,7 @@ export default function App() {
               </button>
               <button
                 onClick={() => {
-                  localStorage.setItem(LOCATION_CONSENT_KEY, 'denied')
+                  void storage.set(LOCATION_CONSENT_KEY, 'denied')
                   setLocationConsentPending(null)
                   setRestaurants([])
                 }}

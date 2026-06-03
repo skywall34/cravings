@@ -1,16 +1,40 @@
+import * as storage from './storage'
+
 const TOKEN_KEY = 'cravings_token'
 
-function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
+export async function getToken(): Promise<string | null> {
+  return storage.get(TOKEN_KEY)
 }
 
-function setToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token)
+async function setToken(token: string): Promise<void> {
+  await storage.set(TOKEN_KEY, token)
 }
 
-function authHeaders(): Record<string, string> {
-  const token = getToken()
+async function removeToken(): Promise<void> {
+  await storage.remove(TOKEN_KEY)
+}
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const token = await getToken()
   return token ? { Authorization: `Bearer ${token}` } : {}
+}
+
+// Web build: BASE_URL ('/cravings/'), same-origin. Native build: absolute prod URL
+// injected via VITE_API_BASE_URL so the WebView (https://localhost) reaches prod.
+function apiBase(): string {
+  return (import.meta.env.VITE_API_BASE_URL ?? import.meta.env.BASE_URL).replace(/\/$/, '')
+}
+
+// Food/asset URLs from the API are root-relative ('/cravings/images/...'). On native
+// they must be prefixed with the prod origin or they resolve against https://localhost
+// and 404. On web (no VITE_API_BASE_URL) they stay relative and same-origin.
+export function assetUrl(path: string | null | undefined): string | undefined {
+  if (!path) return undefined
+  const base = import.meta.env.VITE_API_BASE_URL
+  if (base && !/^https?:\/\//.test(path)) {
+    return new URL(base).origin + path
+  }
+  return path
 }
 
 export interface FoodItem {
@@ -43,12 +67,20 @@ export interface Restaurant {
 export type SwipeDirection = 'left' | 'right' | 'never'
 
 let recovering = false
+let onSessionExpired: (() => void) | null = null
 
-function recoverFromInvalidToken(): void {
+// App registers a reset callback (clear state + route to onboarding). Replaces
+// window.location.reload(), which is a no-op inside the Capacitor WebView.
+export function setSessionExpiredHandler(fn: () => void): void {
+  onSessionExpired = fn
+}
+
+async function recoverFromInvalidToken(): Promise<void> {
   if (recovering) return
   recovering = true
-  localStorage.removeItem(TOKEN_KEY)
-  window.location.reload()
+  await removeToken()
+  if (onSessionExpired) onSessionExpired()
+  else window.location.reload()
 }
 
 export class RateLimitError extends Error {
@@ -63,13 +95,12 @@ export class RateLimitError extends Error {
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
   const opts: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  const res = await fetch(base + path, opts)
-  if (res.status === 401 && getToken()) {
-    recoverFromInvalidToken()
+  const res = await fetch(apiBase() + path, opts)
+  if (res.status === 401 && (await getToken())) {
+    await recoverFromInvalidToken()
     throw new Error('session expired, reloading')
   }
   if (res.status === 204) return undefined as T
@@ -124,7 +155,7 @@ export interface SwipeStats {
 
 export async function ensureUser(): Promise<void> {
   // No-op for guests — DB row created only on registration
-  if (getToken()) return
+  if (await getToken()) return
 }
 
 export async function getMe(): Promise<UserInfo> {
@@ -137,8 +168,7 @@ async function requestNoAuth<T>(method: string, path: string, body?: unknown): P
     headers: { 'Content-Type': 'application/json' },
   }
   if (body !== undefined) opts.body = JSON.stringify(body)
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  const res = await fetch(base + path, opts)
+  const res = await fetch(apiBase() + path, opts)
   const data: unknown = await res.json()
   if (!res.ok) {
     const errMsg =
@@ -152,13 +182,13 @@ async function requestNoAuth<T>(method: string, path: string, body?: unknown): P
 
 export async function register(email: string, password: string, name?: string): Promise<AuthResult> {
   const result = await request<AuthResult>('POST', '/api/auth/register', { email, password, name })
-  setToken(result.api_token)
+  await setToken(result.api_token)
   return result
 }
 
 export async function login(email: string, password: string): Promise<AuthResult> {
   const result = await requestNoAuth<AuthResult>('POST', '/api/auth/login', { email, password })
-  setToken(result.api_token)
+  await setToken(result.api_token)
   return result
 }
 
@@ -166,8 +196,14 @@ export async function logout(): Promise<void> {
   try {
     await request('POST', '/api/auth/logout')
   } finally {
-    localStorage.removeItem(TOKEN_KEY)
+    await removeToken()
   }
+}
+
+// Persist dietary restrictions for registered users. Routed through request() so
+// it shares the API base, auth header, and 401 handling — replaces a raw fetch().
+export async function patchDietaryRestrictions(restrictions: string[]): Promise<void> {
+  await request('PATCH', '/api/users/me', { dietary_restrictions: restrictions })
 }
 
 export interface GuestPrefs {
@@ -182,7 +218,7 @@ export async function changePassword(oldPassword: string, newPassword: string): 
     old_password: oldPassword,
     new_password: newPassword,
   })
-  setToken(result.api_token)
+  await setToken(result.api_token)
 }
 
 export async function fetchStats(): Promise<SwipeStats> {
@@ -259,10 +295,8 @@ export async function deleteAccount(): Promise<void> {
 }
 
 export async function exportData(): Promise<Blob> {
-  const base = import.meta.env.BASE_URL.replace(/\/$/, '')
-  const token = localStorage.getItem('cravings_token')
-  const res = await fetch(`${base}/api/users/me/export`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const res = await fetch(`${apiBase()}/api/users/me/export`, {
+    headers: await authHeaders(),
   })
   if (!res.ok) throw new Error(`Export failed: ${res.status}`)
   return res.blob()

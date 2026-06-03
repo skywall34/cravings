@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { fetchStats, changePassword, deleteAccount, exportData } from '../api'
+import * as storage from '../storage'
 import type { UserInfo, SwipeStats } from '../api'
 
 interface ProfilePageProps {
@@ -146,7 +147,7 @@ export function ProfilePage({ user, onBack, onDeleteAccount }: ProfilePageProps)
                     setDeleteError(null)
                     try {
                       await deleteAccount()
-                      localStorage.removeItem('cravings_token')
+                      await storage.remove('cravings_token')
                       onDeleteAccount?.()
                     } catch (e) {
                       setDeleteError(e instanceof Error ? e.message : 'Deletion failed')
