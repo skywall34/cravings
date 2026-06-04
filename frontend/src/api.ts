@@ -120,6 +120,7 @@ export interface SwipeStats {
   avg_swipes_to_right: number | null
   mood_breakdown: { mood: string; right: number; left: number }[]
   hour_breakdown: { hour: number; right: number; left: number }[]
+  flavor_profile: Record<string, number>
 }
 
 export async function ensureUser(): Promise<void> {

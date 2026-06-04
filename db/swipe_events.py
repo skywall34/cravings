@@ -119,6 +119,23 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         hour_map[h][r["direction"]] = r["n"]
     hour_breakdown = sorted(hour_map.values(), key=lambda x: x["hour"])
 
+    # Flavor profile (average flavor axes over right-swiped dishes)
+    fp_row = conn.execute(
+        "SELECT AVG(f.spice_level) AS spicy, AVG(f.richness) AS rich, "
+        "AVG(f.savory_umami) AS umami, AVG(f.veggie_density) AS fresh, "
+        "AVG(f.sweetness) AS sweet "
+        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
+        "WHERE se.user_id = ? AND se.direction = 'right'",
+        [user_id],
+    ).fetchone()
+    flavor_profile = {
+        "Spicy": round((fp_row["spicy"] or 0.0) * 100),
+        "Rich": round((fp_row["rich"] or 0.0) * 100),
+        "Umami": round((fp_row["umami"] or 0.0) * 100),
+        "Fresh": round((fp_row["fresh"] or 0.0) * 100),
+        "Sweet": round((fp_row["sweet"] or 0.0) * 100),
+    }
+
     # Totals from users row
     user_row = conn.execute(
         "SELECT total_swipes, drift_active FROM users WHERE id = ?", [user_id]
@@ -131,6 +148,7 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "avg_swipes_to_right": avg_swipes_to_right,
         "mood_breakdown": mood_breakdown,
         "hour_breakdown": hour_breakdown,
+        "flavor_profile": flavor_profile,
     }
 
 

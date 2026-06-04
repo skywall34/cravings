@@ -1,6 +1,7 @@
 """Tests for auth endpoints and profile stats."""
 
 import os
+import sqlite3
 import tempfile
 from pathlib import Path
 
@@ -246,6 +247,63 @@ async def test_stats_empty(client):
     assert data["cuisine_breakdown"] == []
     assert data["avg_swipes_to_right"] is None
     assert data["mood_breakdown"] == []
+    fp = data["flavor_profile"]
+    assert set(fp.keys()) == {"Spicy", "Rich", "Umami", "Fresh", "Sweet"}
+    assert all(v == 0 for v in fp.values())
+
+
+def _insert_food_item_auth(db_path: str) -> int:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    cur = conn.execute(
+        "INSERT INTO food_items (name, description, tagging_status, "
+        "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
+        "temperature, texture_softness, sauce_heaviness, richness, "
+        "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
+        "smell_intensity, nausea_trigger, safety_risk_bitmask, dietary_flags_bitmask) "
+        "VALUES ('Test Dish', 'A test item', 'tagged', "
+        "0.8, 0.6, 0.3, 0.7, 0.5, 0.1, "
+        "0.7, 0.4, 0.6, 0.9, "
+        "'chicken', 'japanese', 'noodles_pasta', 0.4, 0.1, "
+        "0.5, 0.0, 0, 0)",
+    )
+    item_id = cur.lastrowid
+    conn.commit()
+    conn.close()
+    return item_id
+
+
+async def test_stats_flavor_profile_with_swipes(client):
+    """flavor_profile axes are 0–100 ints derived from right-swiped dishes."""
+    r = await client.post("/api/auth/register", json={
+        "email": "flavor@example.com",
+        "password": "securepass7",
+        "name": "Flavor",
+    })
+    token = r.json()["api_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+
+    active_db = str(main._db_path)
+    item_id = _insert_food_item_auth(active_db)
+
+    snap_resp = await client.get("/api/recommend?session_id=s1")
+    assert snap_resp.status_code == 200
+    snap_token = snap_resp.json()[0]["snapshot_token"]
+
+    await client.post("/api/swipe", json={
+        "food_item_id": item_id,
+        "direction": "right",
+        "session_id": "s1",
+        "snapshot_token": snap_token,
+    })
+
+    resp = await client.get("/api/profile/stats")
+    assert resp.status_code == 200
+    fp = resp.json()["flavor_profile"]
+    assert set(fp.keys()) == {"Spicy", "Rich", "Umami", "Fresh", "Sweet"}
+    assert all(isinstance(v, int) and 0 <= v <= 100 for v in fp.values())
+    assert fp["Spicy"] == 80
+    assert fp["Rich"] == 90
 
 
 async def test_stats_requires_auth(client):

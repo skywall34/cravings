@@ -1,6 +1,13 @@
 import { useState, useEffect } from 'react'
 import { fetchStats, changePassword, deleteAccount, exportData } from '../api'
 import type { UserInfo, SwipeStats } from '../api'
+import {
+  deriveTasteProfile,
+  TastePersonaCard, InsightCard, FlavorRadar,
+  YesRateGauge, CuisineAffinity, MoodDonut, PeakTimesChart,
+} from './StatsCharts'
+
+const MIN_SWIPES_FOR_PROFILE = 15
 
 interface ProfilePageProps {
   user: UserInfo
@@ -42,55 +49,7 @@ export function ProfilePage({ user, onBack, onDeleteAccount }: ProfilePageProps)
       {loadingStats && <div style={{ color: '#AAA', textAlign: 'center', padding: 40 }}>Loading stats…</div>}
       {statsError && <p style={{ color: '#C0392B' }}>{statsError}</p>}
 
-      {stats && (
-        <>
-          <StatCard>
-            <StatRow label="Total swipes" value={String(stats.total_swipes)} />
-            {stats.avg_swipes_to_right !== null && (
-              <StatRow label="Avg swipes to yes" value={String(stats.avg_swipes_to_right)} />
-            )}
-            <StatRow label="Drift active" value={stats.drift_active ? 'Yes' : 'No'} />
-          </StatCard>
-
-          {stats.cuisine_breakdown.length > 0 && (
-            <Section title="Top Cuisines">
-              {stats.cuisine_breakdown.slice(0, 8).map(c => (
-                <CuisineBar
-                  key={c.cuisine}
-                  label={c.cuisine}
-                  right={c.right}
-                  left={c.left}
-                  max={stats.cuisine_breakdown[0].right + stats.cuisine_breakdown[0].left}
-                />
-              ))}
-            </Section>
-          )}
-
-          {stats.mood_breakdown.length > 0 && (
-            <Section title="By Mood">
-              {stats.mood_breakdown.map(m => (
-                <StatRow
-                  key={m.mood}
-                  label={m.mood.replace(/_/g, ' ')}
-                  value={`${m.right} yes / ${m.left} no`}
-                />
-              ))}
-            </Section>
-          )}
-
-          {stats.hour_breakdown.length > 0 && (
-            <Section title="By Time of Day">
-              {stats.hour_breakdown.map(h => (
-                <StatRow
-                  key={h.hour}
-                  label={formatHour(h.hour)}
-                  value={`${h.right} yes / ${h.left} no`}
-                />
-              ))}
-            </Section>
-          )}
-        </>
-      )}
+      {stats && <StatsSection stats={stats} />}
 
       {!showPasswordForm ? (
         <button
@@ -167,6 +126,72 @@ export function ProfilePage({ user, onBack, onDeleteAccount }: ProfilePageProps)
   )
 }
 
+function StatsSection({ stats }: { stats: SwipeStats }) {
+  if (stats.total_swipes < MIN_SWIPES_FOR_PROFILE) {
+    return (
+      <div style={{
+        marginTop: 8, marginBottom: 8, padding: '28px 24px', borderRadius: 16,
+        background: '#FAFAF8', border: '1px solid #F0E8E0', textAlign: 'center',
+      }}>
+        <div style={{ fontSize: '2rem', marginBottom: 10 }}>🍽️</div>
+        <div style={{ fontWeight: 800, fontSize: '1rem', color: '#2C2C2C', marginBottom: 6 }}>
+          Keep swiping to unlock your taste profile
+        </div>
+        <div style={{ fontSize: '0.85rem', color: '#888', lineHeight: 1.5 }}>
+          You've done {stats.total_swipes} swipe{stats.total_swipes !== 1 ? 's' : ''} so far.
+          {' '}Reach {MIN_SWIPES_FOR_PROFILE} to see your personalized insights.
+        </div>
+      </div>
+    )
+  }
+
+  const profile = deriveTasteProfile(stats)
+
+  return (
+    <>
+      <TastePersonaCard profile={profile} totalSwipes={stats.total_swipes} />
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 16 }}>
+        {profile.insights.map((ins, i) => <InsightCard key={i} insight={ins} />)}
+      </div>
+
+      <Section title="Flavor Profile" subtitle="How your palate breaks down">
+        <div style={{ padding: '16px 8px' }}>
+          <FlavorRadar data={stats.flavor_profile} />
+        </div>
+      </Section>
+
+      <Section title="How You Swipe" subtitle="Decisiveness meter">
+        <div style={{ padding: '18px 16px' }}>
+          <YesRateGauge value={profile.overallYes} avgToYes={stats.avg_swipes_to_right} />
+        </div>
+      </Section>
+
+      {stats.cuisine_breakdown.length > 0 && (
+        <Section title="Cuisine Affinity" subtitle="Ranked by acceptance rate">
+          <CuisineAffinity items={stats.cuisine_breakdown} />
+        </Section>
+      )}
+
+      {stats.mood_breakdown.length > 0 && (
+        <Section title="Mood Mix" subtitle="How you swipe by mood">
+          <div style={{ padding: '16px' }}>
+            <MoodDonut items={stats.mood_breakdown} />
+          </div>
+        </Section>
+      )}
+
+      {stats.hour_breakdown.length > 0 && (
+        <Section title="Peak Craving Times" subtitle="When hunger strikes">
+          <div style={{ padding: '16px' }}>
+            <PeakTimesChart items={stats.hour_breakdown} />
+          </div>
+        </Section>
+      )}
+    </>
+  )
+}
+
 function ChangePasswordForm({ onDone }: { onDone: () => void }) {
   const [oldPw, setOldPw] = useState('')
   const [newPw, setNewPw] = useState('')
@@ -222,59 +247,22 @@ function ChangePasswordForm({ onDone }: { onDone: () => void }) {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
     <div style={{ marginTop: 20 }}>
-      <h3 style={{ margin: '0 0 10px', fontSize: '0.85rem', fontWeight: 700, color: '#B0A89E', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+      <h3 style={{ margin: '0 0 2px', fontSize: '0.85rem', fontWeight: 700, color: '#B0A89E', letterSpacing: '0.06em', textTransform: 'uppercase' }}>
         {title}
       </h3>
+      {subtitle && (
+        <p style={{ margin: '0 0 8px', fontSize: '0.75rem', color: '#C0B8B0', letterSpacing: '0.04em', textTransform: 'uppercase', fontWeight: 600 }}>
+          {subtitle}
+        </p>
+      )}
       <div style={{ background: '#FAFAF8', borderRadius: 10, border: '1px solid #F0E8E0', overflow: 'hidden' }}>
         {children}
       </div>
     </div>
   )
-}
-
-function StatCard({ children }: { children: React.ReactNode }) {
-  return (
-    <div style={{ background: '#FAFAF8', borderRadius: 10, border: '1px solid #F0E8E0', overflow: 'hidden' }}>
-      {children}
-    </div>
-  )
-}
-
-function StatRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '11px 16px', borderBottom: '1px solid #F0E8E0' }}>
-      <span style={{ fontSize: '0.9rem', color: '#555' }}>{label}</span>
-      <span style={{ fontSize: '0.9rem', fontWeight: 700, color: '#2C2C2C' }}>{value}</span>
-    </div>
-  )
-}
-
-function CuisineBar({ label, right, left, max }: { label: string; right: number; left: number; max: number }) {
-  const total = right + left
-  const pct = max > 0 ? (total / max) * 100 : 0
-  const yesPct = total > 0 ? (right / total) * 100 : 0
-  return (
-    <div style={{ padding: '10px 16px', borderBottom: '1px solid #F0E8E0' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-        <span style={{ fontSize: '0.88rem', textTransform: 'capitalize', color: '#444' }}>{label}</span>
-        <span style={{ fontSize: '0.8rem', color: '#AAA' }}>{right} yes · {left} no</span>
-      </div>
-      <div style={{ height: 6, background: '#EEE', borderRadius: 3, overflow: 'hidden' }}>
-        <div style={{ height: '100%', width: `${pct}%`, background: '#F0E8E0', borderRadius: 3, overflow: 'hidden', display: 'flex' }}>
-          <div style={{ width: `${yesPct}%`, background: '#E85D04', height: '100%' }} />
-        </div>
-      </div>
-    </div>
-  )
-}
-
-function formatHour(h: number): string {
-  const suffix = h >= 12 ? 'pm' : 'am'
-  const display = h % 12 || 12
-  return `${display}${suffix}–${(display % 12) + 1}${suffix}`
 }
 
 const secondaryBtnStyle: React.CSSProperties = {
