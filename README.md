@@ -84,11 +84,16 @@ These are deterministic rules — never a model judgment call.
 | Part        | Stack                                             |
 |-------------|---------------------------------------------------|
 | Web app     | React + Vite + TypeScript                         |
+| Android app | Capacitor wrap of the same web bundle (no rewrite)|
 | API + ML    | Python 3.12 / FastAPI (Thompson Sampling in-proc) |
 | Database    | SQLite (local dev) → PostgreSQL (production)      |
 | Food tagging| Ollama `gemma4:e2b`, run locally at ingest time   |
 | Restaurants | Google Places API                                |
 | Deploy      | Docker on a VPS behind Traefik                    |
+
+The same React bundle powers three surfaces: the web app (desktop + iOS via the
+browser) and a native **Android** build wrapped with [Capacitor](https://capacitorjs.com/) —
+one UI codebase, no native rewrite. See `ANDROID_HANDOFF.md`.
 
 The food catalog ships pre-tagged inside `cravings.db` — 510 dishes across 11
 cuisines. The LLM only runs locally when adding new dishes; the live server
@@ -135,3 +140,4 @@ Run the tests with `uv run pytest tests/ -v`.
 - **`docs/CLAUDE.md`** — architecture, per-user model lifecycle, API reference.
 - **`docs/CONTEXT.md`** — domain glossary.
 - **`docs/adr/`** — architecture decision records.
+- **`ANDROID_HANDOFF.md`** — Android (Capacitor) build, env, and sideload guide.

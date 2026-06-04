@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHandle } from 'react'
 import type { FoodItem, SwipeDirection } from '../api'
+import { assetUrl } from '../api'
 import { AllergenNote } from './AllergenNote'
 
 const CUISINE_EMOJI: Record<string, string> = {
@@ -127,9 +128,9 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
         {food.image_url_400 ? (
           <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', overflow: 'hidden' }}>
             <img
-              srcSet={food.image_url_800 ? `${food.image_url_400} 400w, ${food.image_url_800} 800w` : food.image_url_400}
+              srcSet={food.image_url_800 ? `${assetUrl(food.image_url_400)} 400w, ${assetUrl(food.image_url_800)} 800w` : assetUrl(food.image_url_400)}
               sizes="(max-width: 480px) 400px, 800px"
-              src={food.image_url_400}
+              src={assetUrl(food.image_url_400)}
               alt={food.name}
               style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
               loading="lazy"
@@ -154,7 +155,7 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', overflow: 'hidden', background: bgColor }}>
             {food.cuisine_type && !cuisineImgFailed ? (
               <img
-                src={`/images/cuisines/${food.cuisine_type.toLowerCase()}.webp`}
+                src={assetUrl(`/cravings/images/cuisines/${food.cuisine_type.toLowerCase()}.webp`)}
                 alt={food.cuisine_type}
                 style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
                 loading="lazy"

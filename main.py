@@ -15,6 +15,7 @@ mimetypes.add_type("image/webp", ".webp")
 from dotenv import load_dotenv
 from email_validator import EmailNotValidError, validate_email
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.security.http import HTTPBearer as _OptionalBearer
@@ -69,6 +70,19 @@ async def lifespan(app: FastAPI):
 _base_path = os.environ.get("BASE_PATH", "")
 
 app = FastAPI(lifespan=lifespan, root_path=_base_path)
+
+# The Capacitor Android WebView serves bundled assets from https://localhost
+# (androidScheme: https) and calls this API cross-origin. The production web app
+# is same-origin and unaffected. Auth is a Bearer token, not cookies, so
+# credentials stay disabled.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["https://localhost", "capacitor://localhost", "http://localhost"],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type"],
+)
+
 _bearer = HTTPBearer()
 _optional_bearer = HTTPBearer(auto_error=False)
 
