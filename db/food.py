@@ -253,6 +253,18 @@ def update_food_item_tags(conn: sqlite3.Connection, item_id: int, tags: dict) ->
     ]
     present = {k: v for k, v in tags.items() if k in tag_cols}
     present["tagging_status"] = "tagged"
+
+    # Tagger cuisine is unreliable for dishes with culturally ambiguous names.
+    # Prefer the restaurant's cuisine_type when it is set to a specific cuisine.
+    row = conn.execute(
+        "SELECT r.cuisine_type FROM food_items fi "
+        "JOIN restaurants r ON r.id = fi.restaurant_id "
+        "WHERE fi.id = ?",
+        [item_id],
+    ).fetchone()
+    if row and row[0] and row[0] != "other":
+        present["cuisine_type"] = row[0]
+
     set_clause = ", ".join(f"{k} = ?" for k in present.keys())
     conn.execute(
         f"UPDATE food_items SET {set_clause}, updated_at = CURRENT_TIMESTAMP WHERE id = ?",

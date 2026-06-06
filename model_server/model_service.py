@@ -1,6 +1,7 @@
 """Thread-safe per-user model cache backed by the sqlite users table."""
 
 import io
+import logging
 import threading
 from pathlib import Path
 
@@ -9,6 +10,8 @@ import numpy as np
 from db.database import db_connection, get_user, update_user_model_state, DEFAULT_DB_PATH
 from model.features import FeatureSchema
 from model.thompson import ThompsonSamplingModel, ModelConfig
+
+logger = logging.getLogger(__name__)
 
 
 def _serialize_array(arr: np.ndarray) -> bytes:
@@ -58,7 +61,14 @@ class UserModelStore:
                 model.total_swipes = user["total_swipes"]
                 model.last_decay_ts = user["last_decay_ts"] or model.last_decay_ts
                 model._drift_active = bool(user["drift_active"])
-                FeatureSchema().validate_model(model)
+                # Self-heal stale blobs (e.g. after a cuisine-enum/dim change):
+                # fall back to a fresh prior instead of crashing scoring.
+                if not FeatureSchema().validate_model(model):
+                    logger.warning(
+                        "user_id %s has stale model blob (dim=%d, expected=%d) — resetting to fresh prior",
+                        user_id, len(model.mu), FeatureSchema().total_dim,
+                    )
+                    model.reset()
         return model
 
     def persist(self, user_id: int) -> None:

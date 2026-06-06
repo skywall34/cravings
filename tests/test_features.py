@@ -181,11 +181,11 @@ class TestEncodeInteractions:
 class TestFeatureSchema:
     def test_total_dim_no_interactions(self):
         schema = FeatureSchema(use_interactions=False)
-        assert schema.total_dim == 52
+        assert schema.total_dim == FOOD_DIM + CONTEXT_DIM
 
     def test_total_dim_with_interactions(self):
         schema = FeatureSchema(use_interactions=True)
-        assert schema.total_dim == 60
+        assert schema.total_dim == FOOD_DIM + CONTEXT_DIM + len(INTERACTION_TERMS)
 
     def test_food_dim(self):
         schema = FeatureSchema()
@@ -197,24 +197,22 @@ class TestFeatureSchema:
 
     def test_validate_model_ok(self):
         from model.thompson import ThompsonSamplingModel, ModelConfig
-        import numpy as np
         schema = FeatureSchema(use_interactions=False)
-        model = ThompsonSamplingModel(ModelConfig(dim=52))
-        schema.validate_model(model)  # should not raise
+        model = ThompsonSamplingModel(ModelConfig(dim=schema.total_dim))
+        assert schema.validate_model(model) is True
 
-    def test_validate_model_dim_mismatch_raises(self):
+    def test_validate_model_dim_mismatch_returns_false(self):
         from model.thompson import ThompsonSamplingModel, ModelConfig
-        import numpy as np
-        schema = FeatureSchema(use_interactions=False)  # expects 52
-        model = ThompsonSamplingModel(ModelConfig(dim=60))  # wrong: 60
-        with pytest.raises(ValueError, match="Model mu dim 60 != schema total_dim 52"):
-            schema.validate_model(model)
+        schema = FeatureSchema(use_interactions=False)
+        model = ThompsonSamplingModel(ModelConfig(dim=schema.total_dim + 8))  # wrong dim
+        # Stale blob signals False (caller resets to fresh prior) rather than raising.
+        assert schema.validate_model(model) is False
 
 
 class TestEncodeFoodItemUnknownCategory:
     def test_unknown_cuisine_raises(self):
         with pytest.raises(ValueError, match="Unknown category"):
-            encode_food_item({"cuisine_type": "french"})
+            encode_food_item({"cuisine_type": "martian"})
 
     def test_unknown_protein_raises(self):
         with pytest.raises(ValueError, match="Unknown category"):

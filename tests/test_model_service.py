@@ -127,6 +127,37 @@ class TestModelServer:
         status = svc2.get_status(uid)
         assert status["total_swipes"] == 1
 
+    def test_stale_dim_blob_self_heals(self, db_with_user):
+        """A blob from a smaller feature dim (e.g. pre cuisine-enum expansion)
+        must reset to a fresh prior at the current dim instead of crashing scoring."""
+        import numpy as np
+        from db.database import db_connection, update_user_model_state
+        from model.features import FeatureSchema
+        from model_server.model_service import _serialize_array
+
+        db_path, uid = db_with_user
+        stale_dim = FeatureSchema().total_dim - 14  # old enum had fewer cuisines
+        with db_connection(db_path) as conn:
+            update_user_model_state(
+                conn, uid,
+                _serialize_array(np.ones(stale_dim)),
+                _serialize_array(np.eye(stale_dim)),
+                total_swipes=42,
+                last_decay_ts=0.0,
+                drift_active=False,
+            )
+
+        store = UserModelStore(db_path)
+        model = store.get(uid)
+        assert model.mu.shape == (FeatureSchema().total_dim,)
+        assert np.allclose(model.mu, 0.0)  # fresh prior
+        assert model.total_swipes == 0
+
+        # Scoring must work after the heal (this is what used to crash).
+        svc = ModelServer(store)
+        scored = svc.recommend(uid, [make_item_dict()], {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"})
+        assert len(scored) == 1
+
 
 class TestModelServerIsolation:
     """Per-user model isolation via ModelServer."""
