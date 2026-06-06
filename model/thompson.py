@@ -145,6 +145,15 @@ class ThompsonSamplingModel:
         self.last_decay_ts = now
         return days
 
+    def reset(self) -> None:
+        """Wipe learned posterior back to uninformed prior. Use before re-seeding from new taste sliders."""
+        d = self.config.dim
+        self.mu = np.zeros(d)
+        self.B = np.eye(d) * self.config.prior_precision
+        self.total_swipes = 0
+        self._drift_active = False
+        self.last_decay_ts = time.time()
+
     def set_prior_from_onboarding(self, preferences: dict) -> None:
         """Initialize prior mean from onboarding selections.
 

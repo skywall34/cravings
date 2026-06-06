@@ -154,7 +154,7 @@ export function OnboardingScreen({
     setSaving(true)
     try {
       if (isRegistered) {
-        await postOnboarding(prefs)
+        await postOnboarding(prefs, true)
       }
     } catch {
       // non-fatal — still proceed

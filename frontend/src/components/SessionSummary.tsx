@@ -14,9 +14,10 @@ export interface SwipeEntry {
 interface SessionSummaryProps {
   swipeHistory: SwipeEntry[]
   onNewSession: () => void
+  onAdjustTastes: () => void
 }
 
-export function SessionSummary({ swipeHistory, onNewSession }: SessionSummaryProps) {
+export function SessionSummary({ swipeHistory, onNewSession, onAdjustTastes }: SessionSummaryProps) {
   const rightSwipes = swipeHistory.filter(s => s.direction === 'right')
   const neverSwipes = swipeHistory.filter(s => s.direction === 'never')
   const notTodayCount = swipeHistory.filter(s => s.direction === 'left').length
@@ -141,23 +142,38 @@ export function SessionSummary({ swipeHistory, onNewSession }: SessionSummaryPro
           </div>
         </div>
 
-        {/* CTA */}
-        <button
-          style={{
-            width: '100%', padding: '16px', border: 'none', borderRadius: 100,
-            background: '#E85D04', color: '#FFFFFF', fontSize: '1rem', fontWeight: 700,
-            cursor: 'pointer', letterSpacing: '0.02em', fontFamily: 'inherit',
-            transition: 'opacity 0.15s ease, transform 0.15s ease',
-            boxShadow: '0 4px 20px rgba(232,93,4,0.25)',
-          }}
-          onClick={onNewSession}
-          onMouseEnter={e => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.transform = 'translateY(-1px)' }}
-          onMouseLeave={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'translateY(0)' }}
-        >
-          New Session →
-        </button>
-        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E', margin: '-8px 0 0', letterSpacing: '0.02em' }}>
-          Your preferences carry over
+        {/* CTAs */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <button
+            style={{
+              width: '100%', padding: '16px', border: 'none', borderRadius: 100,
+              background: '#E85D04', color: '#FFFFFF', fontSize: '1rem', fontWeight: 700,
+              cursor: 'pointer', letterSpacing: '0.02em', fontFamily: 'inherit',
+              transition: 'opacity 0.15s ease, transform 0.15s ease',
+              boxShadow: '0 4px 20px rgba(232,93,4,0.25)',
+            }}
+            onClick={onNewSession}
+            onMouseEnter={e => { e.currentTarget.style.opacity = '0.9'; e.currentTarget.style.transform = 'translateY(-1px)' }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'translateY(0)' }}
+          >
+            New Session →
+          </button>
+          <button
+            style={{
+              width: '100%', padding: '14px', border: '1.5px solid #E85D04', borderRadius: 100,
+              background: 'transparent', color: '#E85D04', fontSize: '0.95rem', fontWeight: 700,
+              cursor: 'pointer', letterSpacing: '0.02em', fontFamily: 'inherit',
+              transition: 'opacity 0.15s ease, transform 0.15s ease',
+            }}
+            onClick={onAdjustTastes}
+            onMouseEnter={e => { e.currentTarget.style.opacity = '0.8'; e.currentTarget.style.transform = 'translateY(-1px)' }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '1'; e.currentTarget.style.transform = 'translateY(0)' }}
+          >
+            Adjust Tastes →
+          </button>
+        </div>
+        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E', margin: '-4px 0 0', letterSpacing: '0.02em' }}>
+          New Session keeps current preferences · Adjust Tastes resets them
         </p>
       </div>
     </div>

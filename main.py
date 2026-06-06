@@ -234,7 +234,8 @@ async def onboarding(body: dict, user=Depends(_get_user), conn=Depends(_get_conn
     prefs = body.get("preferences") or {}
     if not prefs:
         raise HTTPException(status_code=400, detail="preferences required")
-    await asyncio.to_thread(_model_service.set_onboarding, user["id"], prefs)
+    reset = bool(body.get("reset", False))
+    await asyncio.to_thread(_model_service.set_onboarding, user["id"], prefs, reset)
     db.mark_onboarding_complete(conn, user["id"])
     return {"success": True}
 

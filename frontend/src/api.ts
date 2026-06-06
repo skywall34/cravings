@@ -226,8 +226,8 @@ export async function fetchStats(): Promise<SwipeStats> {
   return request<SwipeStats>('GET', '/api/profile/stats')
 }
 
-export async function postOnboarding(prefs: Record<string, number>): Promise<void> {
-  await request('POST', '/api/onboarding', { preferences: prefs })
+export async function postOnboarding(prefs: Record<string, number>, reset = false): Promise<void> {
+  await request('POST', '/api/onboarding', { preferences: prefs, reset })
 }
 
 export async function getRecommendation(

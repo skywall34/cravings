@@ -238,7 +238,9 @@ class ModelServer:
             "drift_active": model._drift_active,
         }
 
-    def set_onboarding(self, user_id: int, preferences: dict) -> None:
+    def set_onboarding(self, user_id: int, preferences: dict, reset: bool = False) -> None:
         model = self.store.get(user_id)
+        if reset:
+            model.reset()
         model.set_prior_from_onboarding(preferences)
         self.store.persist(user_id)

@@ -136,13 +136,16 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "Sweet": round((fp_row["sweet"] or 0.0) * 100),
     }
 
-    # Totals from users row
+    # Lifetime count from swipe_events (survives taste resets); drift from users row
+    lifetime_row = conn.execute(
+        "SELECT COUNT(*) AS n FROM swipe_events WHERE user_id = ?", [user_id]
+    ).fetchone()
     user_row = conn.execute(
-        "SELECT total_swipes, drift_active FROM users WHERE id = ?", [user_id]
+        "SELECT drift_active FROM users WHERE id = ?", [user_id]
     ).fetchone()
 
     return {
-        "total_swipes": user_row["total_swipes"] if user_row else 0,
+        "total_swipes": lifetime_row["n"] if lifetime_row else 0,
         "drift_active": bool(user_row["drift_active"]) if user_row else False,
         "cuisine_breakdown": cuisine_breakdown,
         "avg_swipes_to_right": avg_swipes_to_right,

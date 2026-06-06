@@ -192,11 +192,14 @@ export default function App() {
     await saveDietaryToStorage(dietary)
     setGuestDietary(dietary)
     if (currentUser?.is_registered) {
-      // Persist dietary restrictions to DB for registered users
       try {
         await patchDietaryRestrictions(dietary.dietaryRestrictions)
       } catch { /* non-fatal */ }
     }
+    // Reset session so post-adjust session starts clean (also harmless on first-run onboarding)
+    sessionId.current = randomId()
+    seenIds.current = []
+    setSwipeHistory([])
     setScreen('swipe')
     await loadNextCard()
   }, [mood, dietary, currentUser])
@@ -428,6 +431,7 @@ export default function App() {
             <SessionSummary
               swipeHistory={swipeHistory}
               onNewSession={() => void handleNewSession()}
+              onAdjustTastes={() => setScreen('onboarding')}
             />
           </div>
         </div>
