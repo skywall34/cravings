@@ -68,7 +68,7 @@ CREATE TABLE IF NOT EXISTS food_items (
 
     -- Composition (3 categorical + 2 continuous)
     protein_type TEXT,      -- chicken|beef|pork|fish|shellfish|egg|tofu_plant|legume|none
-    cuisine_type TEXT,      -- american|mexican|italian|chinese|japanese|thai|indian|korean|mediterranean|middle_eastern|other
+    cuisine_type TEXT,      -- american|mexican|italian|chinese|japanese|thai|indian|korean|mediterranean|middle_eastern|french|spanish|german|eastern_european|vietnamese|filipino|indonesian|brazilian|caribbean|ethiopian|other
     carb_base TEXT,         -- rice|noodles_pasta|bread|potato|tortilla|none
     veggie_density REAL,
     dairy_content REAL,

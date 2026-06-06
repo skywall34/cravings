@@ -7,6 +7,7 @@ Maintains posterior N(μ, B⁻¹) over weight vector w.
 - Decay: exponential decay on historical data (~14-day half-life)
 """
 
+import logging
 import math
 import pickle
 import time
@@ -15,7 +16,9 @@ from dataclasses import dataclass, field
 import numpy as np
 from scipy.special import expit  # sigmoid
 
-from model.features import TOTAL_DIM, build_feature_vector
+from model.features import TOTAL_DIM, FeatureSchema, build_feature_vector
+
+_log = logging.getLogger(__name__)
 
 
 @dataclass
@@ -189,3 +192,11 @@ class ThompsonSamplingModel:
         self.config = state["config"]
         self._drift_active = state["_drift_active"]
         self.last_decay_ts = state.get("last_decay_ts", time.time())
+        schema = FeatureSchema()
+        if not schema.validate_model(self):
+            _log.warning(
+                "Stale model blob (dim=%d, expected=%d) — resetting to fresh prior.",
+                len(self.mu), schema.total_dim,
+            )
+            self.config.dim = schema.total_dim
+            self.reset()

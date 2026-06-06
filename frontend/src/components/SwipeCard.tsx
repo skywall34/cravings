@@ -7,6 +7,8 @@ const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
   american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
   chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
+  middle_eastern: '🧆', spanish: '🥘', german: '🥨', eastern_european: '🥟',
+  filipino: '🍚', indonesian: '🍛', brazilian: '🥩', caribbean: '🌶️', ethiopian: '🫓',
 }
 
 const CUISINE_BG: Record<string, string> = {
@@ -14,6 +16,9 @@ const CUISINE_BG: Record<string, string> = {
   indian: '#FFF3EC', american: '#FFF8EC', thai: '#FFFAEC',
   korean: '#FFF2EC', mediterranean: '#F0FFF4', chinese: '#FFF6EC',
   french: '#FFF5EC', vietnamese: '#FFF4EC', greek: '#F5FFF0',
+  middle_eastern: '#FFFBEC', spanish: '#FFF7EC', german: '#FFFFF0',
+  eastern_european: '#F5F5FF', filipino: '#FFF8F0', indonesian: '#FFF6EC',
+  brazilian: '#F0FFF0', caribbean: '#FFF8EC', ethiopian: '#FFF4E8',
 }
 
 function buildTags(food: FoodItem): string[] {

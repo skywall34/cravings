@@ -39,14 +39,24 @@ TARGET_SIZES = [400, 800]
 WEBP_QUALITY = 80
 
 CUISINE_LIST = [
-    "american", "chinese", "indian", "italian", "japanese",
-    "korean", "mediterranean", "mexican", "middle_eastern", "other", "thai",
+    "american", "brazilian", "caribbean", "chinese", "eastern_european",
+    "ethiopian", "filipino", "french", "german", "indian", "indonesian",
+    "italian", "japanese", "korean", "mediterranean", "mexican",
+    "middle_eastern", "other", "spanish", "thai", "vietnamese",
 ]
 
 CUISINE_SEARCH_TERMS = {
     "american": "American cuisine",
+    "brazilian": "Brazilian cuisine",
+    "caribbean": "Caribbean cuisine",
     "chinese": "Chinese cuisine",
+    "eastern_european": "Eastern European cuisine",
+    "ethiopian": "Ethiopian cuisine",
+    "filipino": "Filipino cuisine",
+    "french": "French cuisine",
+    "german": "German cuisine",
     "indian": "Indian cuisine",
+    "indonesian": "Indonesian cuisine",
     "italian": "Italian cuisine",
     "japanese": "Japanese cuisine",
     "korean": "Korean cuisine",
@@ -54,7 +64,9 @@ CUISINE_SEARCH_TERMS = {
     "mexican": "Mexican cuisine",
     "middle_eastern": "Middle Eastern cuisine",
     "other": "world cuisine food",
+    "spanish": "Spanish cuisine",
     "thai": "Thai cuisine",
+    "vietnamese": "Vietnamese cuisine",
 }
 
 
@@ -85,6 +97,7 @@ def _center_crop_4_3(img: Image.Image) -> Image.Image:
 
 def _process_and_save(raw_bytes: bytes, slug: str, hash_: str, food_dir: Path) -> None:
     """Center-crop, resize to 400/800, save as webp."""
+    Image.MAX_IMAGE_PIXELS = None  # very large Wikimedia source images are not attacks
     img = Image.open(BytesIO(raw_bytes)).convert("RGB")
     img = _center_crop_4_3(img)
     for width in TARGET_SIZES:

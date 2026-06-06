@@ -22,7 +22,10 @@ CATEGORICAL_FIELDS = ["protein_type", "cuisine_type", "carb_base"]
 VALID_PROTEIN = {"chicken", "beef", "pork", "fish", "shellfish", "egg", "tofu_plant", "legume", "none"}
 VALID_CUISINE = {
     "american", "mexican", "italian", "chinese", "japanese", "thai",
-    "indian", "korean", "mediterranean", "middle_eastern", "other",
+    "indian", "korean", "mediterranean", "middle_eastern",
+    "french", "spanish", "german", "eastern_european",
+    "vietnamese", "filipino", "indonesian", "brazilian", "caribbean", "ethiopian",
+    "other",
 }
 VALID_CARB = {"rice", "noodles_pasta", "bread", "potato", "tortilla", "none"}
 

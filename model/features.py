@@ -15,7 +15,10 @@ USE_INTERACTIONS = os.environ.get("CRAVINGS_USE_INTERACTIONS", "0") == "1"
 PROTEIN_TYPES = ["chicken", "beef", "pork", "fish", "shellfish", "egg", "tofu_plant", "legume", "none"]
 CUISINE_TYPES = [
     "american", "mexican", "italian", "chinese", "japanese",
-    "thai", "indian", "korean", "mediterranean", "middle_eastern", "other",
+    "thai", "indian", "korean", "mediterranean", "middle_eastern",
+    "french", "spanish", "german", "eastern_european",
+    "vietnamese", "filipino", "indonesian", "brazilian", "caribbean", "ethiopian",
+    "other",
 ]
 CARB_BASES = ["rice", "noodles_pasta", "bread", "potato", "tortilla", "none"]
 DIETARY_MODES = ["standard", "vegetarian", "vegan", "restricted"]
@@ -43,7 +46,7 @@ INTERACTION_TERMS = [
     ("veggie_density", "mood", "light_healthy"),
 ]
 
-# Dimensions: 14 continuous + 9 protein + 11 cuisine + 6 carb = 40 food dims
+# Dimensions: 14 continuous + 9 protein + 21 cuisine + 6 carb = 50 food dims
 FOOD_DIM = len(CONTINUOUS_ATTRS) + len(PROTEIN_TYPES) + len(CUISINE_TYPES) + len(CARB_BASES)
 # Context: 4 dietary_mode + 2 time_of_day + 4 mood + 1 rejection_rate + 1 days_since = 12
 CONTEXT_DIM = len(DIETARY_MODES) + 2 + len(MOODS) + 2
@@ -85,12 +88,9 @@ class FeatureSchema:
     def total_dim(self) -> int:
         return self.food_dim + self.context_dim + self.interaction_dim
 
-    def validate_model(self, model) -> None:
-        if len(model.mu) != self.total_dim:
-            raise ValueError(
-                f"Model mu dim {len(model.mu)} != schema total_dim {self.total_dim}. "
-                f"Model was likely trained with USE_INTERACTIONS={not self.use_interactions}."
-            )
+    def validate_model(self, model) -> bool:
+        """Returns True if dims match. False signals stale blob — caller should reset to fresh prior."""
+        return len(model.mu) == self.total_dim
 
 
 def encode_food_item(item: dict) -> np.ndarray:

@@ -20,7 +20,7 @@ CONTINUOUS (0.0 to 1.0):
 
 CATEGORICAL (use exact values):
 - protein_type: chicken|beef|pork|fish|shellfish|egg|tofu_plant|legume|none
-- cuisine_type: american|mexican|italian|chinese|japanese|thai|indian|korean|mediterranean|middle_eastern|other
+- cuisine_type: american|mexican|italian|chinese|japanese|thai|indian|korean|mediterranean|middle_eastern|french|spanish|german|eastern_european|vietnamese|filipino|indonesian|brazilian|caribbean|ethiopian|other
 - carb_base: rice|noodles_pasta|bread|potato|tortilla|none
 
 SAFETY FLAGS (list of strings, empty if none apply):
@@ -102,6 +102,54 @@ FEW_SHOT_EXAMPLES = [
             "carb_base": "rice",
             "safety_flags": ["raw_fish"],
             "dietary_flags": ["dairy_free"],
+        },
+    },
+    {
+        "input": "Croissant - Buttery, flaky laminated pastry baked golden, served warm",
+        "output": {
+            "spice_level": 0.0,
+            "sweetness": 0.3,
+            "sourness": 0.1,
+            "savory_umami": 0.2,
+            "saltiness": 0.3,
+            "bitterness": 0.0,
+            "temperature": 0.7,
+            "texture_softness": 0.5,
+            "sauce_heaviness": 0.0,
+            "richness": 0.7,
+            "veggie_density": 0.0,
+            "dairy_content": 0.8,
+            "smell_intensity": 0.5,
+            "nausea_trigger": 0.0,
+            "protein_type": "none",
+            "cuisine_type": "french",
+            "carb_base": "bread",
+            "safety_flags": [],
+            "dietary_flags": ["vegetarian", "contains_eggs"],
+        },
+    },
+    {
+        "input": "Pho Bo - Vietnamese beef noodle soup with rice noodles, herbs, bean sprouts, and lime",
+        "output": {
+            "spice_level": 0.2,
+            "sweetness": 0.1,
+            "sourness": 0.3,
+            "savory_umami": 0.8,
+            "saltiness": 0.5,
+            "bitterness": 0.1,
+            "temperature": 1.0,
+            "texture_softness": 0.6,
+            "sauce_heaviness": 0.7,
+            "richness": 0.4,
+            "veggie_density": 0.3,
+            "dairy_content": 0.0,
+            "smell_intensity": 0.6,
+            "nausea_trigger": 0.1,
+            "protein_type": "beef",
+            "cuisine_type": "vietnamese",
+            "carb_base": "noodles_pasta",
+            "safety_flags": [],
+            "dietary_flags": ["dairy_free", "gluten_free"],
         },
     },
     {

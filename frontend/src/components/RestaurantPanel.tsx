@@ -5,6 +5,8 @@ const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
   american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
   chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
+  middle_eastern: '🧆', spanish: '🥘', german: '🥨', eastern_european: '🥟',
+  filipino: '🍚', indonesian: '🍛', brazilian: '🥩', caribbean: '🌶️', ethiopian: '🫓',
 }
 
 interface StarRatingProps {
