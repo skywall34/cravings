@@ -24,10 +24,12 @@ _log = logging.getLogger(__name__)
 @dataclass
 class ModelConfig:
     dim: int = TOTAL_DIM
-    prior_precision: float = 0.25  # λ₀ — prior precision (regularization)
+    prior_precision: float = 1.0  # λ₀ — prior precision (unit-Gaussian prior). Higher ⇒
+    # tighter first-session sampling so seeded onboarding prefs aren't drowned by noise.
     alpha_schedule: dict = field(default_factory=lambda: {
-        0: 1.0,     # swipes 0-19: high exploration
-        20: 0.5,    # swipes 20-99: balanced
+        0: 0.3,     # swipes 0-19: trust the fresh onboarding prior; low variance so card 1
+        #             reflects the sliders even on a mild-skewed catalog
+        20: 0.5,    # swipes 20-99: onboarding signal spent — explore to refine
         100: 0.3,   # swipes 100+: mostly exploit
     })
     drift_reset_alpha: float = 0.8  # α when drift detected
@@ -165,7 +167,10 @@ class ThompsonSamplingModel:
         Positive = craving, negative = aversion. Values should be in [-1, 1].
         """
         from model.features import CONTINUOUS_ATTRS
-        prior_strength = 0.5  # moderate — easily overridden by swipes
+        prior_strength = 2.0  # confident enough to steer card 1 past sampling noise on a
+        # mild-skewed real catalog; kept moderate (not higher) so a mis-set slider stays
+        # recoverable — note B-growth makes μ updates shrink fast, so a too-strong prior
+        # would trap the session.
         for attr, signal in preferences.items():
             if attr in CONTINUOUS_ATTRS:
                 idx = CONTINUOUS_ATTRS.index(attr)

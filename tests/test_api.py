@@ -655,6 +655,82 @@ async def test_guest_swipe_no_db_rows(client):
     assert swipe_count == 0
 
 
+# ---------------------------------------------------------------------------
+# L3 — Slider→first-card alignment through the real /api/recommend HTTP path.
+# Mirrors the user complaint ("first image isn't spicy when I asked for spicy").
+# Each fresh session_id ⇒ fresh guest model, so N requests = N independent first draws.
+# ---------------------------------------------------------------------------
+
+# HTTP path is ~50× slower than the in-process L2 test, so fewer draws; threshold
+# is correspondingly looser but still far above the ~0.5 coin-flip of the old model.
+_L3_DRAWS = 120
+_L3_ALIGN_THRESHOLD = 0.75
+
+
+def _insert_spice_spread(db_path: str, n: int = 40) -> float:
+    """Insert n tagged dishes with spice_level spread uniformly across [0, 1] and other
+    attrs at mid values. Returns the median spice_level of the pool."""
+    import numpy as np
+    spice = np.linspace(0.0, 1.0, n)
+    conn = sqlite3.connect(db_path)
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO food_items (name, description, tagging_status, "
+            "spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, "
+            "temperature, texture_softness, sauce_heaviness, richness, "
+            "protein_type, cuisine_type, carb_base, veggie_density, dairy_content, "
+            "smell_intensity, nausea_trigger, safety_risk_bitmask, dietary_flags_bitmask) "
+            "VALUES (?, 'spread', 'tagged', "
+            "?, 0.5, 0.5, 0.5, 0.5, 0.5, "
+            "0.5, 0.5, 0.5, 0.5, "
+            "'chicken', 'other', 'rice', 0.5, 0.5, "
+            "0.5, 0.0, 0, 0)",
+            [f"dish_{i}", float(spice[i])],
+        )
+    conn.commit()
+    conn.close()
+    return float(np.median(spice))
+
+
+async def test_guest_first_card_honors_spice_slider(client):
+    """L3/T3.2: maxed spice slider ⇒ the single first card (top_n=1) is spicy in ≥75% of
+    fresh guest sessions, through the full HTTP recommend path. This is the regression
+    test bound to the reported bug."""
+    median = _insert_spice_spread(TEST_DB)
+    hits = 0
+    spices = []
+    for i in range(_L3_DRAWS):
+        resp = await client.get(
+            f"/api/recommend?session_id=g_l3_{i}&pref_spice_level=1.0&top_n=1"
+        )
+        assert resp.status_code == 200
+        top = resp.json()[0]
+        spices.append(top["spice_level"])
+        if top["spice_level"] >= median:
+            hits += 1
+    frac = hits / _L3_DRAWS
+    assert frac >= _L3_ALIGN_THRESHOLD, (
+        f"Spicy slider yielded a spicy first card only {frac:.0%} via /api/recommend "
+        f"(need >={_L3_ALIGN_THRESHOLD:.0%})."
+    )
+
+
+async def test_guest_first_card_neutral_slider_unbiased(client):
+    """L3 control: no slider set ⇒ first card spice is unbiased (~50/50 vs median).
+    Guards against the fix hard-biasing toward high attributes when nothing was requested."""
+    median = _insert_spice_spread(TEST_DB)
+    hits = 0
+    for i in range(_L3_DRAWS):
+        resp = await client.get(f"/api/recommend?session_id=g_l3n_{i}&top_n=1")
+        assert resp.status_code == 200
+        if resp.json()[0]["spice_level"] >= median:
+            hits += 1
+    frac = hits / _L3_DRAWS
+    assert 0.35 <= frac <= 0.65, (
+        f"Neutral guest showed {frac:.0%} high-spice first cards (want ~50%)."
+    )
+
+
 async def test_registered_user_recommend_with_pref_params_unaffected(auth_client):
     """T6: Registered path ignores pref_* params; swipe count increments normally."""
     client, _, _ = auth_client

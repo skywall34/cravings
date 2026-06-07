@@ -110,7 +110,8 @@ class TestExplorationControl:
     def test_alpha_initial_phase(self):
         model = ThompsonSamplingModel()
         model.total_swipes = 5
-        assert model._get_alpha() == 1.0
+        # Low (was 1.0) so a freshly-seeded onboarding prior steers card 1 on a skewed catalog.
+        assert model._get_alpha() == 0.3
 
     def test_alpha_learning_phase(self):
         model = ThompsonSamplingModel()
@@ -195,8 +196,8 @@ class TestColdStart:
 
     def test_onboarding_moderate_strength(self, model):
         model.set_prior_from_onboarding({"spice_level": 1.0})
-        # Should be scaled by prior_strength (0.5), not raw value
-        assert model.mu[0] == 0.5
+        # Scaled by prior_strength (2.0), not raw value
+        assert model.mu[0] == 2.0
 
 
 class TestPersistence:
