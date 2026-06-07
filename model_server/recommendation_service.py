@@ -58,6 +58,19 @@ class ModelServer:
         lam = 0.0 if not liked_embeddings else (0.3 if model.total_swipes < 20 else 0.1)
         return liked_embeddings, lam
 
+    def apply_decay(self, user_id: int) -> bool:
+        """Apply temporal decay to the user's model and persist if it ran.
+
+        Explicit, write-bearing step kept out of recommend() so that recommend()
+        stays a pure read. Idempotent within a 6-hour window; persisting the bumped
+        last_decay_ts is what prevents double-decay after a process restart. Returns
+        True if decay ran (and the model was persisted)."""
+        model = self.store.get(user_id)
+        if model.maybe_apply_decay() > 0:
+            self.store.persist(user_id)
+            return True
+        return False
+
     def recommend(
         self,
         user_id: int,
@@ -68,15 +81,15 @@ class ModelServer:
     ) -> list[dict]:
         """Score candidates for user and return top_n as [{id, name, score, rank}].
 
+        Does not mutate or persist the model posterior — call apply_decay() first if
+        temporal decay is due. (Still records an impression for the chosen item, which
+        is intrinsic to having recommended it.)
+
         swiped_cuisines: set of cuisine_types already seen by this user (for stratified
         cold-start). Compute via db.get_swiped_cuisines before calling. Defaults to empty
         set (treats user as new) when not provided.
         """
         model = self.store.get(user_id)
-        decayed_days = model.maybe_apply_decay()
-        if decayed_days > 0:
-            self.store.persist(user_id)
-
         liked_embeddings, lam = self._get_liked_embeddings(user_id, model)
 
         # Stratified cold-start: cover each cuisine before model exploits preferences.

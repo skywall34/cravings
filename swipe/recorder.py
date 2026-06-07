@@ -18,6 +18,16 @@ class SwipeError(ValueError):
     pass
 
 
+def reward_for_direction(direction: str) -> float:
+    """Map a swipe direction to its reward signal. Single source of truth for both
+    Registered and Guest paths so the reward policy can never drift between them."""
+    if direction not in ("right", "left", "never"):
+        raise SwipeError("direction must be 'right', 'left', or 'never'")
+    left_reward = float(os.environ.get("CRAVINGS_LEFT_SWIPE_REWARD", "0.3"))
+    never_reward = float(os.environ.get("CRAVINGS_NEVER_REWARD", "0.0"))
+    return 1.0 if direction == "right" else (never_reward if direction == "never" else left_reward)
+
+
 async def record_swipe(
     conn: sqlite3.Connection,
     model_service,
@@ -29,14 +39,10 @@ async def record_swipe(
     session_id: str,
 ) -> int:
     """Full Right-Swipe / Left-Swipe contract. Returns total_swipes after update."""
-    if direction not in ("right", "left", "never"):
-        raise SwipeError("direction must be 'right', 'left', or 'never'")
+    reward = reward_for_direction(direction)
     if snapshot.user_id != user["id"]:
         raise SwipeError("snapshot user mismatch")
 
-    left_reward = float(os.environ.get("CRAVINGS_LEFT_SWIPE_REWARD", "0.3"))
-    never_reward = float(os.environ.get("CRAVINGS_NEVER_REWARD", "0.0"))
-    reward = 1.0 if direction == "right" else (never_reward if direction == "never" else left_reward)
     total = await asyncio.to_thread(
         model_service.record_swipe, user["id"], item, snapshot.to_context(), reward
     )

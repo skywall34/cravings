@@ -9,7 +9,7 @@ Owns the full contract of a Swipe Session:
 
 from swipe.snapshot import Snapshot, capture, capture_guest, seal, verify, verify_guest, SnapshotError
 from swipe.session import SessionStore
-from swipe.recorder import record_swipe
+from swipe.recorder import record_swipe, reward_for_direction, SwipeError
 from swipe.intake import build_intake, build_guest_intake, shape_results, add_image_urls
 
 __all__ = [
@@ -21,6 +21,8 @@ __all__ = [
     "verify",
     "verify_guest",
     "record_swipe",
+    "reward_for_direction",
+    "SwipeError",
     "SnapshotError",
     "build_intake",
     "build_guest_intake",

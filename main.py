@@ -29,6 +29,7 @@ from model_server.model_service import UserModelStore
 from model_server.recommendation_service import ModelServer
 from places import PlacesAdapter, PlacesError
 from rate_limit import RateLimiter
+from recommender import make_recommender
 from tagging import safety
 from tagging.client import tag_food_item
 
@@ -258,51 +259,23 @@ async def recommend(
     if credentials:
         user = db.get_user_by_token(conn, credentials.credentials)
 
-    if user is not None:
-        # Registered path: Thompson model personalization
-        snapshot, candidates = await swipe.build_intake(
-            conn, _sessions, user, dietary_mode, mood, hour, session_id
-        )
-        if not candidates:
-            raise HTTPException(status_code=404, detail="no eligible food items")
-        swiped_cuisines = db.get_swiped_cuisines(conn, user["id"])
-        results = await asyncio.to_thread(
-            _model_service.recommend, user["id"], candidates, snapshot.to_context(), top_n,
-            swiped_cuisines,
-        )
-        if not results:
-            raise HTTPException(status_code=404, detail="no eligible food items")
-        return swipe.shape_results(results, candidates, snapshot, _base_path)
-
-    # Guest path: session-scoped Thompson model seeded from onboarding prefs, no DB writes
     taste_prefs = {
         k[5:]: float(v)
         for k, v in request.query_params.items()
         if k.startswith("pref_")
     }
-    snapshot, candidates = await swipe.build_guest_intake(
-        conn, _sessions, session_id, dietary_restrictions, safety_overrides,
-        dietary_mode, mood, hour, top_n, extra_excluded=excluded_ids,
+    rec = make_recommender(
+        conn=conn, user=user, sessions=_sessions, model_service=_model_service,
+        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=session_id,
+        dietary_restrictions=dietary_restrictions, safety_overrides=safety_overrides,
+        taste_prefs=taste_prefs,
     )
-    if not candidates:
+    results = await rec.recommend(
+        mood=mood, dietary_mode=dietary_mode, hour=hour, top_n=top_n, excluded_ids=excluded_ids,
+    )
+    if not results:
         raise HTTPException(status_code=404, detail="no eligible food items")
-    model = await _sessions.get_model(session_id)
-    if model is None and taste_prefs:
-        from model.thompson import ThompsonSamplingModel as _TSM
-        model = _TSM()
-        model.set_prior_from_onboarding(taste_prefs)
-        await _sessions.set_model(session_id, model)
-    if model is not None:
-        raw_scores = await asyncio.to_thread(model.score_items, candidates, snapshot.to_context())
-        results = [
-            {"id": candidates[idx]["id"], "name": candidates[idx]["name"],
-             "score": score, "rank": rank + 1}
-            for rank, (idx, score) in enumerate(raw_scores[:top_n])
-        ]
-    else:
-        results = [{"id": c["id"], "name": c["name"], "score": 0.0, "rank": i + 1}
-                   for i, c in enumerate(candidates[:top_n])]
-    return swipe.shape_results(results, candidates, snapshot, _base_path)
+    return results
 
 
 @app.post("/api/swipe")
@@ -324,41 +297,18 @@ async def swipe_endpoint(
     if credentials:
         user = db.get_user_by_token(conn, credentials.credentials)
 
-    if user is not None:
-        # Registered path: full model update + DB write
-        try:
-            snapshot = swipe.verify(token, user["id"])
-        except swipe.SnapshotError as e:
-            raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
-        try:
-            total_swipes = await swipe.record_swipe(
-                conn, _model_service, _sessions, user, item, snapshot, direction, session_id
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e)) from e
-        seen_count = await _sessions.count(session_id)
-        session_complete = seen_count >= _session_max_swipes
-        return {"success": True, "total_swipes": total_swipes, "session_complete": session_complete}
-
-    # Guest path: verify session binding, mark seen, update session model, no DB write
+    rec = make_recommender(
+        conn=conn, user=user, sessions=_sessions, model_service=_model_service,
+        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=session_id,
+        taste_prefs=body.get("taste_prefs") or {},
+    )
     try:
-        snapshot = swipe.verify_guest(token, session_id)
+        outcome = await rec.record(item=item, direction=direction, token=token)
     except swipe.SnapshotError as e:
         raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
-    await _sessions.mark(session_id, food_item_id)
-    seen_count = await _sessions.count(session_id)
-    session_complete = seen_count >= _session_max_swipes
-    taste_prefs = body.get("taste_prefs") or {}
-    model = await _sessions.get_model(session_id)
-    if model is None and taste_prefs:
-        from model.thompson import ThompsonSamplingModel as _TSM
-        model = _TSM()
-        model.set_prior_from_onboarding(taste_prefs)
-        await _sessions.set_model(session_id, model)
-    if model is not None:
-        reward = 1.0 if direction == "right" else 0.0
-        await asyncio.to_thread(model.record_swipe, item, snapshot.to_context(), reward)
-    return {"success": True, "total_swipes": 0, "session_complete": session_complete}
+    except swipe.SwipeError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    return {"success": True, **outcome}
 
 
 @app.post("/api/session/reset")
