@@ -106,6 +106,32 @@ def test_spicy_slider_avoids_mild_food_on_real_catalog():
     )
 
 
+def test_co_craving_lifts_both_attrs_on_real_catalog():
+    """Combination sliders on real data: 'spicy AND sweet' lifts BOTH spice and sweetness
+    of the first card above their catalog means, even though few real dishes are both
+    (the model trades off, so the lift is modest but unmistakable)."""
+    conn = sqlite3.connect(REAL_DB)
+    conn.row_factory = sqlite3.Row
+    sessions = SessionStore()
+    prefs = {"spice_level": 1.0, "sweetness": 1.0}
+    try:
+        spice_vals, sweet_vals = [], []
+        for i in range(N_SESSIONS):
+            snap, candidates = _draw_pool(conn, sessions, f"real_combo_{i}")
+            model = ThompsonSamplingModel()
+            model.set_prior_from_onboarding(prefs)
+            top = candidates[model.score_items(candidates, snap.to_context())[0][0]]
+            spice_vals.append(float(top.get("spice_level") or 0.0))
+            sweet_vals.append(float(top.get("sweetness") or 0.0))
+    finally:
+        conn.close()
+
+    mean_spice, mean_sweet = float(np.mean(spice_vals)), float(np.mean(sweet_vals))
+    # Catalog means ~0.24 (spice) / ~0.30 (sweet); require a clear lift over both.
+    assert mean_spice > 0.33, f"co-craving spice lift too weak: {mean_spice:.2f} (catalog ~0.24)."
+    assert mean_sweet > 0.40, f"co-craving sweet lift too weak: {mean_sweet:.2f} (catalog ~0.30)."
+
+
 def test_neutral_slider_no_tail_bias_on_real_catalog():
     """No slider ⇒ top-1 spice tracks the catalog (low), not the spicy tail. Confirms the
     fix doesn't smuggle in a global high-attribute bias on real data."""

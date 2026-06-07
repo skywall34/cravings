@@ -137,3 +137,74 @@ def test_neutral_sliders_have_no_bias():
         f"Neutral guest showed {frac:.0%} high-spice bias (want ~50%). "
         f"Fix should not hard-bias when no slider is set."
     )
+
+
+# ===========================================================================
+# T2.5–T2.7 — COMBINATION sliders (multiple attrs at once, graded magnitudes)
+# These check the model honors slider *combinations* and their *relative
+# strengths*, not just one maxed dimension. Averaged over several independent
+# pools so the assertions aren't a single-pool artifact (equal-signal cases are
+# symmetric, so per-pool ordering is noisy — only joint lift / magnitude
+# ordering is robust).
+# ===========================================================================
+
+def _random_attr_pool(n: int, seed: int) -> list[dict]:
+    """n dishes with every continuous attr i.i.d. uniform on [0,1] (median ~0.5),
+    so each taste dimension varies independently of the others."""
+    rng = np.random.default_rng(seed)
+    pool = []
+    for i in range(n):
+        dish = {a: float(rng.random()) for a in CONTINUOUS_ATTRS}
+        dish.update({"id": i, "name": f"d{i}", "protein_type": "chicken",
+                     "cuisine_type": "other", "carb_base": "rice"})
+        pool.append(dish)
+    return pool
+
+
+def mean_top_attrs(prefs: dict, attrs: list[str], *, pool_seeds=(1, 2, 3), draws=250) -> dict:
+    """Mean top-1 value of each attr in `attrs`, averaged over fresh first-session draws
+    across several independent pools. Returns {attr: mean_value}."""
+    acc = {a: [] for a in attrs}
+    for ps in pool_seeds:
+        pool = _random_attr_pool(50, ps)
+        for d in range(draws):
+            np.random.seed(30_000 * ps + d)
+            model = fresh_first_session_model(prefs)
+            top_idx = model.score_items(pool, FIRST_SESSION_CTX)[0][0]
+            for a in attrs:
+                acc[a].append(pool[top_idx][a])
+    return {a: float(np.mean(v)) for a, v in acc.items()}
+
+
+# T2.5 — two simultaneous cravings: "sweet AND spicy". Both should be lifted.
+def test_co_craving_lifts_both_attributes():
+    means = mean_top_attrs({"spice_level": 1.0, "sweetness": 1.0}, ["spice_level", "sweetness"])
+    assert means["spice_level"] > 0.60 and means["sweetness"] > 0.60, (
+        f"Co-craving (spice+sweet) failed to lift both: {means} (each want >0.60, pool median ~0.50)."
+    )
+
+
+# T2.6 — graded magnitudes: a strong slider should outrank a weak one of the same sign.
+# spice=1.0 vs sweetness=0.3 → top cards should skew spicier than they are sweet.
+def test_graded_signal_orders_by_magnitude():
+    means = mean_top_attrs({"spice_level": 1.0, "sweetness": 0.3}, ["spice_level", "sweetness"])
+    assert means["spice_level"] > 0.65, (
+        f"Strong slider (spice=1.0) under-weighted: mean {means['spice_level']:.2f} (want >0.65)."
+    )
+    assert means["spice_level"] > means["sweetness"] + 0.10, (
+        f"Model ignored relative slider strength: spice {means['spice_level']:.2f} should clearly "
+        f"exceed weaker sweet {means['sweetness']:.2f} (margin >0.10)."
+    )
+
+
+# T2.7 — partial combination with fractional values: richness=0.6, crunchy(texture)=0.4.
+# Both lifted above baseline, and the larger slider lands higher.
+def test_partial_combo_both_lifted_and_ordered():
+    means = mean_top_attrs({"richness": 0.6, "texture_softness": 0.4},
+                           ["richness", "texture_softness"])
+    assert means["richness"] > 0.55 and means["texture_softness"] > 0.55, (
+        f"Partial combo failed to lift both: {means} (each want >0.55)."
+    )
+    assert means["richness"] > means["texture_softness"], (
+        f"Larger slider (richness 0.6) should outrank smaller (texture 0.4): {means}."
+    )
