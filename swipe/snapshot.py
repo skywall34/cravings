@@ -86,8 +86,12 @@ def _b64decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + pad)
 
 
-def verify(token: str, user_id: int) -> Snapshot:
-    """Decode + verify signature, TTL, and user binding. Raises SnapshotError."""
+def _decode_authentic(token: str) -> Snapshot:
+    """Authenticity + freshness: decode, verify HMAC signature, and check TTL.
+
+    Returns a structurally valid, unexpired Snapshot — but does NOT check who it
+    belongs to. Callers apply their own binding (user_id or session_id) on top.
+    Raises SnapshotError on any failure."""
     if not token or "." not in token:
         raise SnapshotError("missing snapshot token")
     try:
@@ -107,10 +111,16 @@ def verify(token: str, user_id: int) -> Snapshot:
     except Exception as e:
         raise SnapshotError(f"corrupt payload: {e}") from e
 
-    if snap.user_id != user_id:
-        raise SnapshotError("snapshot user mismatch")
     if time.time() - snap.issued_at > _TTL_SECONDS:
         raise SnapshotError("snapshot expired")
+    return snap
+
+
+def verify(token: str, user_id: int) -> Snapshot:
+    """Authentic + bound to this Registered user. Raises SnapshotError."""
+    snap = _decode_authentic(token)
+    if snap.user_id != user_id:
+        raise SnapshotError("snapshot user mismatch")
     return snap
 
 
@@ -134,30 +144,10 @@ def capture_guest(
 
 
 def verify_guest(token: str, session_id: str) -> Snapshot:
-    """Decode + verify signature, TTL, and session_id binding for a guest snapshot."""
-    if not token or "." not in token:
-        raise SnapshotError("missing snapshot token")
-    try:
-        p_b64, s_b64 = token.split(".", 1)
-        payload = _b64decode(p_b64)
-        sig = _b64decode(s_b64)
-    except Exception as e:
-        raise SnapshotError(f"malformed token: {e}") from e
-
-    expected = hmac.new(_SECRET, payload, sha256).digest()
-    if not hmac.compare_digest(sig, expected):
-        raise SnapshotError("invalid signature")
-
-    try:
-        data = json.loads(payload)
-        snap = Snapshot(**data)
-    except Exception as e:
-        raise SnapshotError(f"corrupt payload: {e}") from e
-
+    """Authentic + bound to this guest session. Raises SnapshotError."""
+    snap = _decode_authentic(token)
     if snap.user_id != 0:
         raise SnapshotError("not a guest snapshot")
     if snap.session_id != session_id:
         raise SnapshotError("snapshot session mismatch")
-    if time.time() - snap.issued_at > _TTL_SECONDS:
-        raise SnapshotError("snapshot expired")
     return snap
