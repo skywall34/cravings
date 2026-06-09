@@ -23,3 +23,7 @@ dependencies = [
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+addopts = "-m 'not slow'"
+markers = [
+    "slow: heavy statistical SLA gates (ADR-0009). Excluded by default; run via `pytest -m slow`.",
+]
