@@ -207,10 +207,49 @@ def get_items_without_embedding(conn: sqlite3.Connection) -> list[dict]:
 
 def get_items_without_image(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute(
-        "SELECT id, name, cuisine_type FROM food_items "
+        "SELECT id, name, description, cuisine_type FROM food_items "
         "WHERE tagging_status = 'tagged' AND image_slug IS NULL"
     ).fetchall()
     return [dict(r) for r in rows]
+
+
+def get_items_for_judging(conn: sqlite3.Connection) -> list[dict]:
+    """Items with images not yet judged. Resumable: skips already-judged rows."""
+    rows = conn.execute(
+        "SELECT id, name, image_slug, image_hash, image_review_status FROM food_items "
+        "WHERE image_slug IS NOT NULL AND image_judge_verdict IS NULL"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def get_rejected_items(conn: sqlite3.Connection) -> list[dict]:
+    rows = conn.execute(
+        "SELECT id, name, description, cuisine_type FROM food_items "
+        "WHERE image_review_status = 'rejected'"
+    ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def update_food_item_judgement(
+    conn: sqlite3.Connection,
+    item_id: int,
+    verdict: str,
+    reason: str,
+    review_status: str | None = None,
+) -> None:
+    if review_status is not None:
+        conn.execute(
+            "UPDATE food_items SET image_judge_verdict = ?, image_judge_reason = ?, "
+            "image_review_status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [verdict, reason, review_status, item_id],
+        )
+    else:
+        conn.execute(
+            "UPDATE food_items SET image_judge_verdict = ?, image_judge_reason = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [verdict, reason, item_id],
+        )
+    conn.commit()
 
 
 def update_food_item_image(
@@ -222,14 +261,26 @@ def update_food_item_image(
     image_license: str,
     image_source_url: str,
     image_review_status: str = "auto",
+    judge_verdict: str | None = None,
+    judge_reason: str | None = None,
 ) -> None:
-    conn.execute(
-        "UPDATE food_items SET image_slug = ?, image_hash = ?, image_author = ?, "
-        "image_license = ?, image_source_url = ?, image_review_status = ?, "
-        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        [image_slug, image_hash, image_author, image_license, image_source_url,
-         image_review_status, item_id],
-    )
+    if judge_verdict is not None:
+        conn.execute(
+            "UPDATE food_items SET image_slug = ?, image_hash = ?, image_author = ?, "
+            "image_license = ?, image_source_url = ?, image_review_status = ?, "
+            "image_judge_verdict = ?, image_judge_reason = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [image_slug, image_hash, image_author, image_license, image_source_url,
+             image_review_status, judge_verdict, judge_reason, item_id],
+        )
+    else:
+        conn.execute(
+            "UPDATE food_items SET image_slug = ?, image_hash = ?, image_author = ?, "
+            "image_license = ?, image_source_url = ?, image_review_status = ?, "
+            "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            [image_slug, image_hash, image_author, image_license, image_source_url,
+             image_review_status, item_id],
+        )
     conn.commit()
 
 

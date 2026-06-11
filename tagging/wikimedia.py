@@ -262,25 +262,104 @@ def find_image_tier3(item_name: str, client: httpx.Client) -> Optional[ImageCand
     return _image_from_wikipedia_summary(item_name, 3, client)
 
 
+def find_image_candidates(
+    item_name: str,
+    cuisine_type: str,
+    client: httpx.Client,
+    max_candidates: int = 6,
+) -> list[ImageCandidate]:
+    """Return up to max_candidates ordered tier1→2→2.5→3, de-duped by file_page."""
+    seen: set[str] = set()
+    candidates: list[ImageCandidate] = []
+
+    def _add(c: Optional[ImageCandidate]) -> None:
+        if c and c.file_page not in seen:
+            seen.add(c.file_page)
+            candidates.append(c)
+
+    # Tier 1: SPARQL LIMIT 3
+    query = f"""
+SELECT ?image WHERE {{
+  ?item rdfs:label "{item_name}"@en ;
+        wdt:P18 ?image .
+}}
+LIMIT 3
+"""
+    try:
+        resp = client.get(
+            SPARQL_ENDPOINT,
+            params={"query": query, "format": "json"},
+            headers={**_HEADERS, "Accept": "application/sparql-results+json"},
+            timeout=20,
+        )
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            for b in resp.json().get("results", {}).get("bindings", []):
+                _add(ImageCandidate(
+                    file_page=_commons_file_url(b["image"]["value"]),
+                    tier=1,
+                    review_needed=False,
+                ))
+    except Exception:
+        pass
+
+    if len(candidates) >= max_candidates:
+        return candidates[:max_candidates]
+
+    time.sleep(0.5)
+
+    # Tier 2: both title variants
+    for title in [f"{item_name} ({cuisine_type} dish)", f"{item_name} (dish)"]:
+        _add(_image_from_wikipedia_summary(title, 2, client))
+        if len(candidates) >= max_candidates:
+            return candidates[:max_candidates]
+
+    time.sleep(0.5)
+
+    # Tier 2.5: all license-passing hits from Commons search
+    try:
+        resp = client.get(
+            "https://commons.wikimedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": f"{item_name} filetype:bitmap",
+                "srnamespace": "6",
+                "srlimit": "5",
+                "srprop": "title",
+                "format": "json",
+            },
+            headers=_HEADERS,
+            timeout=15,
+        )
+        if resp.status_code != 429:
+            resp.raise_for_status()
+            for r in resp.json().get("query", {}).get("search", []):
+                if len(candidates) >= max_candidates:
+                    break
+                fp = f"https://commons.wikimedia.org/wiki/{r['title'].replace(' ', '_')}"
+                attr = fetch_metadata(fp, client)
+                time.sleep(0.3)
+                if attr:
+                    _add(ImageCandidate(file_page=fp, tier=25, review_needed=False))
+    except Exception:
+        pass
+
+    if len(candidates) >= max_candidates:
+        return candidates[:max_candidates]
+
+    time.sleep(0.5)
+
+    # Tier 3: plain title (needs_review)
+    _add(_image_from_wikipedia_summary(item_name, 3, client))
+
+    return candidates[:max_candidates]
+
+
 def find_image(item_name: str, cuisine_type: str, client: httpx.Client) -> Optional[ImageCandidate]:
     """Run tier 1 → 2 → 2.5 → 3 disambiguation. Returns first hit or None."""
-    candidate = find_image_tier1(item_name, client)
-    if candidate:
-        return candidate
-
-    time.sleep(0.5)
-    candidate = find_image_tier2(item_name, cuisine_type, client)
-    if candidate:
-        return candidate
-
-    time.sleep(0.5)
-    candidate = find_image_tier25(item_name, client)
-    if candidate:
-        return candidate
-
-    time.sleep(0.5)
-    candidate = find_image_tier3(item_name, client)
-    return candidate
+    candidates = find_image_candidates(item_name, cuisine_type, client, max_candidates=1)
+    return candidates[0] if candidates else None
 
 
 def download_and_hash(image_url_or_file_page: str, client: httpx.Client) -> tuple[bytes, str]:

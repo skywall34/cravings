@@ -67,6 +67,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE food_items ADD COLUMN image_source_url TEXT")
     if "image_review_status" not in food_cols:
         conn.execute("ALTER TABLE food_items ADD COLUMN image_review_status TEXT NOT NULL DEFAULT 'auto'")
+    if "image_judge_verdict" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_judge_verdict TEXT")
+    if "image_judge_reason" not in food_cols:
+        conn.execute("ALTER TABLE food_items ADD COLUMN image_judge_reason TEXT")
 
     if "recent_likes_json" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN recent_likes_json TEXT")

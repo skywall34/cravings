@@ -90,7 +90,9 @@ CREATE TABLE IF NOT EXISTS food_items (
     image_author TEXT,
     image_license TEXT,
     image_source_url TEXT,
-    image_review_status TEXT NOT NULL DEFAULT 'auto',  -- auto | needs_review | approved
+    image_review_status TEXT NOT NULL DEFAULT 'auto',  -- auto | needs_review | approved | rejected
+    image_judge_verdict TEXT,                          -- pass | fail (NULL = not yet judged)
+    image_judge_reason TEXT,                           -- ≤20-word reason from VLM
 
     -- Metadata
     tagging_status TEXT NOT NULL DEFAULT 'pending',  -- pending | tagged | failed

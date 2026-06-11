@@ -49,7 +49,10 @@ from db.food import (
     get_least_impressed,
     get_items_without_embedding,
     get_items_without_image,
+    get_items_for_judging,
+    get_rejected_items,
     update_food_item_image,
+    update_food_item_judgement,
     update_food_item_embedding,
     update_food_item_tags,
 )
@@ -79,8 +82,9 @@ __all__ = [
     "get_eligible_food_items", "get_popular_food_items", "get_food_item",
     "list_food_items", "list_restaurants",
     "record_impression", "get_least_impressed", "get_items_without_embedding",
-    "get_items_without_image", "update_food_item_image", "update_food_item_embedding",
-    "update_food_item_tags",
+    "get_items_without_image", "get_items_for_judging", "get_rejected_items",
+    "update_food_item_image", "update_food_item_judgement",
+    "update_food_item_embedding", "update_food_item_tags",
     # swipe_events
     "record_swipe", "recent_rejection_rate", "days_since_last_swipe",
     "get_swiped_cuisines", "get_swipe_stats",

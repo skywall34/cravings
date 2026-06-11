@@ -93,6 +93,7 @@ def add_image_urls(item: dict, base_path: str) -> dict:
     slug = item.get("image_slug")
     hash_ = item.get("image_hash")
     status = item.get("image_review_status", "auto")
+    # "rejected" deliberately absent — VLM judge set it; frontend falls back to cuisine placeholder
     if slug and hash_ and status in ("auto", "approved", "needs_review"):
         base = f"{base_path}/images/food/{slug}-{hash_}"
         item["image_url_400"] = f"{base}-400.webp"

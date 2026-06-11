@@ -21,6 +21,7 @@ from tagging.wikimedia import (
     find_image_tier2,
     find_image_tier3,
     find_image,
+    find_image_candidates,
     _is_allowed_license,
     _normalize_license,
 )
@@ -196,3 +197,77 @@ class TestFindImage:
         with patch("tagging.wikimedia.time.sleep"):
             result = find_image("NoSuchDish", "thai", client)
         assert result is None
+
+
+class TestFindImageCandidates:
+    def test_tier1_hit_included(self):
+        client = _mock_client(
+            SPARQL_TIER1_HIT,           # tier1 → 1 candidate
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 cuisine
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 plain
+            COMMONS_SEARCH_MISS,        # tier2.5
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier3
+        )
+        with patch("tagging.wikimedia.time.sleep"):
+            candidates = find_image_candidates("Carbonara", "italian", client, max_candidates=6)
+        assert len(candidates) == 1
+        assert candidates[0].tier == 1
+
+    def test_multi_tier_ordering(self):
+        """tier1 + tier3 both hit → tier1 first."""
+        client = _mock_client(
+            SPARQL_TIER1_HIT,           # tier1 → 1 candidate
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 cuisine
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 plain
+            COMMONS_SEARCH_MISS,        # tier2.5
+            WIKIPEDIA_PAGEIMAGE_HIT,    # tier3 → 1 candidate
+        )
+        with patch("tagging.wikimedia.time.sleep"):
+            candidates = find_image_candidates("Carbonara", "italian", client, max_candidates=6)
+        assert len(candidates) == 2
+        assert candidates[0].tier == 1
+        assert candidates[1].tier == 3
+
+    def test_dedup_by_file_page(self):
+        """Same file_page returned by tier1 and tier3 → only appears once."""
+        # Both tiers return the same commons URL
+        same_hit = {
+            "results": {
+                "bindings": [
+                    {"image": {"type": "uri",
+                               "value": "http://commons.wikimedia.org/wiki/Special:FilePath/Carbonara.jpg"}}
+                ]
+            }
+        }
+        # WIKIPEDIA_PAGEIMAGE_HIT returns File:Carbonara.jpg too
+        client = _mock_client(
+            same_hit,                   # tier1 → file_page = File:Carbonara.jpg
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 cuisine
+            WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 plain
+            COMMONS_SEARCH_MISS,        # tier2.5
+            WIKIPEDIA_PAGEIMAGE_HIT,    # tier3 → also Carbonara.jpg
+        )
+        with patch("tagging.wikimedia.time.sleep"):
+            candidates = find_image_candidates("Carbonara", "italian", client, max_candidates=6)
+        file_pages = [c.file_page for c in candidates]
+        assert len(file_pages) == len(set(file_pages)), "duplicate file_pages found"
+
+    def test_max_candidates_respected(self):
+        client = _mock_client(
+            SPARQL_TIER1_HIT,
+            WIKIPEDIA_PAGEIMAGE_MISS,
+            WIKIPEDIA_PAGEIMAGE_MISS,
+            COMMONS_SEARCH_MISS,
+            WIKIPEDIA_PAGEIMAGE_HIT,
+        )
+        with patch("tagging.wikimedia.time.sleep"):
+            candidates = find_image_candidates("Carbonara", "italian", client, max_candidates=1)
+        assert len(candidates) <= 1
+
+    def test_find_image_still_returns_first(self):
+        """find_image() wraps find_image_candidates(max=1) — backward compat."""
+        client = _mock_client(SPARQL_TIER1_HIT)
+        with patch("tagging.wikimedia.time.sleep"):
+            result = find_image("Carbonara", "italian", client)
+        assert result is not None
+        assert result.tier == 1

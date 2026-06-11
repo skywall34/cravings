@@ -85,6 +85,39 @@ def tmp_db(tmp_path):
     return db_path, item_id
 
 
+def _all_tier_misses():
+    """Responses covering all tier lookups that produce no candidates."""
+    return [
+        SPARQL_TIER1_MISS,          # tier1 SPARQL
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 "{name} (cuisine dish)"
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 "{name} (dish)"
+        COMMONS_SEARCH_MISS,        # tier2.5 Commons search
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier3
+    ]
+
+
+def _tier1_then_misses():
+    """Tier1 hits, all other tiers miss (fill up to max_candidates)."""
+    return [
+        SPARQL_TIER1_HIT,           # tier1 SPARQL → 1 candidate
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 "{name} (cuisine dish)"
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 "{name} (dish)"
+        COMMONS_SEARCH_MISS,        # tier2.5
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier3
+    ]
+
+
+def _tier3_only():
+    """Tier1/2/2.5 miss, tier3 hits."""
+    return [
+        SPARQL_TIER1_MISS,          # tier1
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 cuisine
+        WIKIPEDIA_PAGEIMAGE_MISS,   # tier2 plain
+        COMMONS_SEARCH_MISS,        # tier2.5
+        WIKIPEDIA_PAGEIMAGE_HIT,    # tier3 → 1 candidate
+    ]
+
+
 class TestPipelineEndToEnd:
     def test_tier1_hit_writes_files_and_updates_db(self, tmp_db, tmp_path):
         db_path, item_id = tmp_db
@@ -92,6 +125,7 @@ class TestPipelineEndToEnd:
         img_bytes = _make_image_bytes()
 
         import scripts.fetch_food_images as pipeline
+        from tagging.judge import Verdict
         orig_db = pipeline.DB_PATH
         orig_images = pipeline.IMAGES_ROOT
 
@@ -101,13 +135,19 @@ class TestPipelineEndToEnd:
             pipeline.MISSING_CSV = images_root / "missing.csv"
 
             client = _mock_client_seq(
-                SPARQL_TIER1_HIT,          # tier-1 SPARQL
-                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata
+                *_tier1_then_misses(),     # find_image_candidates tier lookups
+                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata for tier1 candidate
                 COMMONS_IMAGE_URL,         # download_and_hash: get image URL
                 img_bytes,                 # download_and_hash: fetch actual image
             )
 
-            with patch("tagging.wikimedia.time.sleep"), patch("scripts.fetch_food_images.time.sleep"):
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.judge_image_bytes",
+                      return_value=Verdict("pass", "looks like carbonara")),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
                 item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
                 ok = pipeline.process_one(item, client, images_root / "food", dry_run=False, force=False)
 
@@ -120,12 +160,14 @@ class TestPipelineEndToEnd:
 
             with db.db_connection(db_path) as conn:
                 row = conn.execute(
-                    "SELECT image_slug, image_hash, image_review_status FROM food_items WHERE id = ?",
+                    "SELECT image_slug, image_hash, image_review_status, image_judge_verdict "
+                    "FROM food_items WHERE id = ?",
                     [item_id]
                 ).fetchone()
             assert row["image_slug"] == "carbonara"
             assert row["image_hash"] is not None
             assert row["image_review_status"] == "auto"
+            assert row["image_judge_verdict"] == "pass"
 
         finally:
             pipeline.DB_PATH = orig_db
@@ -144,11 +186,15 @@ class TestPipelineEndToEnd:
             pipeline.MISSING_CSV = images_root / "missing.csv"
 
             client = _mock_client_seq(
-                SPARQL_TIER1_HIT,
-                COMMONS_EXTMETA_CC_BY_SA,
+                *_tier1_then_misses(),
+                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata → license OK → dry_run print + return
             )
 
-            with patch("tagging.wikimedia.time.sleep"), patch("scripts.fetch_food_images.time.sleep"):
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
                 item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
                 pipeline.process_one(item, client, images_root / "food", dry_run=True, force=False)
 
@@ -158,12 +204,14 @@ class TestPipelineEndToEnd:
             pipeline.IMAGES_ROOT = orig_images
             pipeline.MISSING_CSV = orig_images / "missing.csv"
 
-    def test_tier3_hit_sets_needs_review_and_appends_csv(self, tmp_db, tmp_path):
+    def test_tier3_hit_judge_pass_sets_auto(self, tmp_db, tmp_path):
+        """Tier3 candidate + judge pass → status is 'auto' (needs_review retired for new ingests)."""
         db_path, item_id = tmp_db
         images_root = tmp_path / "images"
         img_bytes = _make_image_bytes()
 
         import scripts.fetch_food_images as pipeline
+        from tagging.judge import Verdict
         orig_db, orig_images = pipeline.DB_PATH, pipeline.IMAGES_ROOT
         try:
             pipeline.DB_PATH = db_path
@@ -171,16 +219,19 @@ class TestPipelineEndToEnd:
             pipeline.MISSING_CSV = images_root / "missing.csv"
 
             client = _mock_client_seq(
-                SPARQL_TIER1_MISS,
-                WIKIPEDIA_PAGEIMAGE_MISS, WIKIPEDIA_PAGEIMAGE_MISS,  # tier-2 misses (2 attempts)
-                COMMONS_SEARCH_MISS,                                  # tier-2.5 miss
-                WIKIPEDIA_PAGEIMAGE_HIT,   # tier-3 hit
-                COMMONS_EXTMETA_CC_BY_SA,  # metadata
+                *_tier3_only(),
+                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata
                 COMMONS_IMAGE_URL,         # image URL lookup
                 img_bytes,                 # actual image
             )
 
-            with patch("tagging.wikimedia.time.sleep"), patch("scripts.fetch_food_images.time.sleep"):
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.judge_image_bytes",
+                      return_value=Verdict("pass", "plausible pasta")),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
                 item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
                 ok = pipeline.process_one(item, client, images_root / "food", dry_run=False, force=False)
 
@@ -188,15 +239,122 @@ class TestPipelineEndToEnd:
 
             with db.db_connection(db_path) as conn:
                 row = conn.execute(
-                    "SELECT image_review_status FROM food_items WHERE id = ?", [item_id]
+                    "SELECT image_review_status, image_judge_verdict FROM food_items WHERE id = ?",
+                    [item_id]
                 ).fetchone()
-            assert row["image_review_status"] == "needs_review"
+            assert row["image_review_status"] == "auto"
+            assert row["image_judge_verdict"] == "pass"
 
+        finally:
+            pipeline.DB_PATH = orig_db
+            pipeline.IMAGES_ROOT = orig_images
+            pipeline.MISSING_CSV = orig_images / "missing.csv"
+
+    def test_candidate1_fail_candidate2_pass(self, tmp_db, tmp_path):
+        """Judge rejects tier1 candidate → moves on → tier3 candidate passes."""
+        db_path, item_id = tmp_db
+        images_root = tmp_path / "images"
+        img_bytes = _make_image_bytes()
+
+        import scripts.fetch_food_images as pipeline
+        from tagging.judge import Verdict
+        orig_db, orig_images = pipeline.DB_PATH, pipeline.IMAGES_ROOT
+        try:
+            pipeline.DB_PATH = db_path
+            pipeline.IMAGES_ROOT = images_root
+            pipeline.MISSING_CSV = images_root / "missing.csv"
+
+            client = _mock_client_seq(
+                *_tier3_only(),             # find_image_candidates: tier3 hit
+                SPARQL_TIER1_HIT,           # find_image_candidates reused for multi-candidate...
+                # Actually we need both tier1 AND tier3 candidates.
+                # Patch find_image_candidates to return 2 candidates instead.
+            )
+            # Reset client — use patched find_image_candidates instead
+            client2 = _mock_client_seq(
+                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata for tier1 candidate
+                COMMONS_IMAGE_URL,         # download tier1 image
+                img_bytes,                 # tier1 image bytes
+                COMMONS_EXTMETA_CC_BY_SA,  # fetch_metadata for tier3 candidate
+                COMMONS_IMAGE_URL,         # download tier3 image
+                img_bytes,                 # tier3 image bytes
+            )
+
+            from tagging.wikimedia import ImageCandidate
+            two_candidates = [
+                ImageCandidate("https://commons.wikimedia.org/wiki/File:Bad.jpg", tier=1, review_needed=False),
+                ImageCandidate("https://commons.wikimedia.org/wiki/File:Good.jpg", tier=3, review_needed=True),
+            ]
+
+            judge_calls = iter([
+                Verdict("fail", "painting not food"),
+                Verdict("pass", "looks like pasta"),
+            ])
+
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.find_image_candidates", return_value=two_candidates),
+                patch("scripts.fetch_food_images.judge_image_bytes", side_effect=judge_calls),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
+                item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
+                ok = pipeline.process_one(item, client2, images_root / "food", dry_run=False, force=False)
+
+            assert ok is True
+            assert pipeline.MISSING_CSV.exists()  # tier1 judge failure logged
+
+            with db.db_connection(db_path) as conn:
+                row = conn.execute(
+                    "SELECT image_judge_verdict, image_review_status FROM food_items WHERE id=?",
+                    [item_id]
+                ).fetchone()
+            assert row["image_judge_verdict"] == "pass"
+            assert row["image_review_status"] == "auto"
+
+        finally:
+            pipeline.DB_PATH = orig_db
+            pipeline.IMAGES_ROOT = orig_images
+            pipeline.MISSING_CSV = orig_images / "missing.csv"
+
+    def test_all_fail_writes_nothing(self, tmp_db, tmp_path):
+        """All candidates fail judge → DB unchanged, missing.csv logged."""
+        db_path, item_id = tmp_db
+        images_root = tmp_path / "images"
+
+        import scripts.fetch_food_images as pipeline
+        from tagging.judge import Verdict, JudgeError
+        orig_db, orig_images = pipeline.DB_PATH, pipeline.IMAGES_ROOT
+        try:
+            pipeline.DB_PATH = db_path
+            pipeline.IMAGES_ROOT = images_root
+            pipeline.MISSING_CSV = images_root / "missing.csv"
+
+            client = _mock_client_seq(
+                *_tier1_then_misses(),
+                COMMONS_EXTMETA_CC_BY_SA,
+                COMMONS_IMAGE_URL,
+                _make_image_bytes(),
+            )
+
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.judge_image_bytes",
+                      return_value=Verdict("fail", "clearly wrong food")),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
+                item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
+                ok = pipeline.process_one(item, client, images_root / "food", dry_run=False, force=False)
+
+            assert ok is False
             assert pipeline.MISSING_CSV.exists()
-            with open(pipeline.MISSING_CSV) as f:
-                reader = csv.DictReader(f)
-                rows = list(reader)
-            assert any(r["name"] == "Carbonara" for r in rows)
+
+            with db.db_connection(db_path) as conn:
+                row = conn.execute(
+                    "SELECT image_slug FROM food_items WHERE id=?", [item_id]
+                ).fetchone()
+            assert row["image_slug"] is None
 
         finally:
             pipeline.DB_PATH = orig_db
@@ -214,14 +372,79 @@ class TestPipelineEndToEnd:
             pipeline.IMAGES_ROOT = images_root
             pipeline.MISSING_CSV = images_root / "missing.csv"
 
-            client = _mock_client_seq(SPARQL_TIER1_HIT, COMMONS_EXTMETA_REJECTED)
+            client = _mock_client_seq(
+                *_tier1_then_misses(),
+                COMMONS_EXTMETA_REJECTED,  # fetch_metadata for tier1 → rejected
+            )
 
-            with patch("tagging.wikimedia.time.sleep"), patch("scripts.fetch_food_images.time.sleep"):
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
                 item = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
                 ok = pipeline.process_one(item, client, images_root / "food", dry_run=False, force=False)
 
             assert ok is False
             assert pipeline.MISSING_CSV.exists()
+        finally:
+            pipeline.DB_PATH = orig_db
+            pipeline.IMAGES_ROOT = orig_images
+            pipeline.MISSING_CSV = orig_images / "missing.csv"
+
+    def test_refetch_rejected_flips_to_auto(self, tmp_db, tmp_path):
+        """--refetch-rejected: previously rejected item gets new image + auto status."""
+        db_path, item_id = tmp_db
+        images_root = tmp_path / "images"
+        img_bytes = _make_image_bytes()
+
+        import scripts.fetch_food_images as pipeline
+        from tagging.judge import Verdict
+        orig_db, orig_images = pipeline.DB_PATH, pipeline.IMAGES_ROOT
+
+        # Pre-mark item as rejected
+        with db.db_connection(db_path) as conn:
+            conn.execute(
+                "UPDATE food_items SET image_slug='old', image_hash='oldhash', "
+                "image_review_status='rejected', image_judge_verdict='fail', "
+                "image_judge_reason='painting' WHERE id=?",
+                [item_id]
+            )
+            conn.commit()
+
+        try:
+            pipeline.DB_PATH = db_path
+            pipeline.IMAGES_ROOT = images_root
+            pipeline.MISSING_CSV = images_root / "missing.csv"
+
+            client = _mock_client_seq(
+                *_tier1_then_misses(),
+                COMMONS_EXTMETA_CC_BY_SA,
+                COMMONS_IMAGE_URL,
+                img_bytes,
+            )
+
+            with (
+                patch("tagging.wikimedia.time.sleep"),
+                patch("scripts.fetch_food_images.time.sleep"),
+                patch("scripts.fetch_food_images.judge_image_bytes",
+                      return_value=Verdict("pass", "good food photo")),
+                patch("scripts.fetch_food_images.search_openverse", return_value=[]),
+            ):
+                item_data = {"id": item_id, "name": "Carbonara", "cuisine_type": "italian"}
+                ok = pipeline.process_one(item_data, client, images_root / "food", dry_run=False, force=True)
+
+            assert ok is True
+
+            with db.db_connection(db_path) as conn:
+                row = conn.execute(
+                    "SELECT image_review_status, image_judge_verdict, image_hash FROM food_items WHERE id=?",
+                    [item_id]
+                ).fetchone()
+            assert row["image_review_status"] == "auto"
+            assert row["image_judge_verdict"] == "pass"
+            assert row["image_hash"] != "oldhash"
+
         finally:
             pipeline.DB_PATH = orig_db
             pipeline.IMAGES_ROOT = orig_images

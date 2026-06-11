@@ -27,9 +27,12 @@ import db.database as db
 from tagging.wikimedia import (
     Attribution,
     find_image,
+    find_image_candidates,
     fetch_metadata,
     download_and_hash,
 )
+from tagging.openverse import search_openverse, OpenverseResult
+from tagging.judge import JudgeError, check_ollama_available, judge_image_bytes
 
 IMAGES_ROOT = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
 DB_PATH = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
@@ -123,6 +126,7 @@ def process_one(
     food_dir: Path,
     dry_run: bool,
     force: bool,
+    use_judge: bool = True,
 ) -> bool:
     """Fetch, process and DB-update one item. Returns True on success."""
     item_id = item["id"]
@@ -130,67 +134,141 @@ def process_one(
     cuisine = item.get("cuisine_type") or ""
     slug = _slugify(name)
 
-    print(f"  [{item_id}] {name} ({cuisine}) ...", end=" ", flush=True)
+    print(f"  [{item_id}] {name} ({cuisine}) ...")
 
-    candidate = find_image(name, cuisine, client)
+    # Stage A: Wikimedia candidates
+    wikimedia_candidates = find_image_candidates(name, cuisine, client, max_candidates=6)
     time.sleep(1)
 
-    if candidate is None:
-        print("no image found")
-        _append_missing(item_id, name, cuisine, "no_candidate", "")
-        return False
+    for candidate in wikimedia_candidates:
+        attribution = fetch_metadata(candidate.file_page, client)
+        time.sleep(0.5)
+        if attribution is None:
+            _append_missing(item_id, name, cuisine, "license_rejected", candidate.file_page)
+            continue
 
-    attribution = fetch_metadata(candidate.file_page, client)
-    time.sleep(1)
+        if dry_run:
+            print(f"    DRY RUN tier={candidate.tier} -> {slug}-????-400.webp")
+            return True
 
-    if attribution is None:
-        print("license rejected")
-        _append_missing(item_id, name, cuisine, "license_rejected", candidate.file_page)
-        return False
+        try:
+            raw_bytes, hash_ = download_and_hash(candidate.file_page, client)
+        except Exception as e:
+            _append_missing(item_id, name, cuisine, f"download_error:{e}", candidate.file_page)
+            continue
 
-    if dry_run:
-        review = "needs_review" if candidate.review_needed else "auto"
-        print(f"DRY RUN tier={candidate.tier} -> {slug}-????-400.webp [{review}]")
+        if use_judge:
+            try:
+                verdict = judge_image_bytes(raw_bytes, name)
+            except JudgeError as e:
+                print(f"    judge_error (skip candidate): {e}")
+                continue
+            if verdict.verdict != "pass":
+                print(f"    judge_fail tier={candidate.tier}: {verdict.reason}")
+                _append_missing(item_id, name, cuisine,
+                                f"judge_fail_tier{candidate.tier}:{verdict.reason}",
+                                candidate.file_page)
+                continue
+            judge_verdict, judge_reason = "pass", verdict.reason
+        else:
+            judge_verdict, judge_reason = None, None
+
+        food_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            _process_and_save(raw_bytes, slug, hash_, food_dir)
+        except Exception as e:
+            _append_missing(item_id, name, cuisine, f"processing_error:{e}", candidate.file_page)
+            continue
+
+        with db.db_connection(DB_PATH) as conn:
+            db.update_food_item_image(
+                conn, item_id, slug, hash_,
+                attribution.author, attribution.license, attribution.source_url,
+                "auto", judge_verdict, judge_reason,
+            )
+
+        print(f"    OK tier={candidate.tier} -> {slug}-{hash_}-400.webp")
         return True
 
-    try:
-        raw_bytes, hash_ = download_and_hash(candidate.file_page, client)
-    except Exception as e:
-        print(f"download failed: {e}")
-        _append_missing(item_id, name, cuisine, f"download_error:{e}", candidate.file_page)
-        return False
+    # Stage B: Openverse
+    queries = [f'"{name}" {cuisine} dish', name]
+    for query in queries:
+        ov_results = search_openverse(query, client)
+        time.sleep(1)
+        for ov in ov_results:
+            if dry_run:
+                print(f"    DRY RUN openverse -> {slug}-????-400.webp")
+                return True
 
-    food_dir.mkdir(parents=True, exist_ok=True)
-    try:
-        _process_and_save(raw_bytes, slug, hash_, food_dir)
-    except Exception as e:
-        print(f"image processing failed: {e}")
-        _append_missing(item_id, name, cuisine, f"processing_error:{e}", candidate.file_page)
-        return False
+            try:
+                resp = client.get(ov.url, headers={"User-Agent": "cravings-image-fetcher/1.0"},
+                                  timeout=30, follow_redirects=True)
+                resp.raise_for_status()
+                raw_bytes = resp.content
+            except Exception as e:
+                _append_missing(item_id, name, cuisine, f"openverse_download_error:{e}", ov.url)
+                continue
 
-    review_status = "needs_review" if candidate.review_needed else "auto"
+            import hashlib
+            hash_ = hashlib.sha256(raw_bytes).hexdigest()[:8]
 
-    with db.db_connection(DB_PATH) as conn:
-        db.update_food_item_image(
-            conn, item_id, slug, hash_,
-            attribution.author, attribution.license, attribution.source_url,
-            review_status,
-        )
+            if use_judge:
+                try:
+                    verdict = judge_image_bytes(raw_bytes, name)
+                except JudgeError as e:
+                    print(f"    judge_error (skip openverse candidate): {e}")
+                    continue
+                if verdict.verdict != "pass":
+                    print(f"    judge_fail openverse: {verdict.reason}")
+                    _append_missing(item_id, name, cuisine,
+                                    f"judge_fail_openverse:{verdict.reason}", ov.url)
+                    continue
+                judge_verdict, judge_reason = "pass", verdict.reason
+            else:
+                judge_verdict, judge_reason = None, None
 
-    if candidate.review_needed:
-        _append_missing(item_id, name, cuisine, f"tier3_needs_review", candidate.file_page)
+            food_dir.mkdir(parents=True, exist_ok=True)
+            try:
+                _process_and_save(raw_bytes, slug, hash_, food_dir)
+            except Exception as e:
+                _append_missing(item_id, name, cuisine, f"processing_error:{e}", ov.url)
+                continue
 
-    print(f"tier={candidate.tier} -> {slug}-{hash_}-400.webp [{review_status}]")
-    return True
+            with db.db_connection(DB_PATH) as conn:
+                db.update_food_item_image(
+                    conn, item_id, slug, hash_,
+                    ov.creator, ov.license, ov.foreign_landing_url,
+                    "auto", judge_verdict, judge_reason,
+                )
+
+            print(f"    OK openverse -> {slug}-{hash_}-400.webp")
+            return True
+        if ov_results:
+            break  # tried at least one result from primary query; avoid double search
+
+    print(f"    FAILED all candidates")
+    _append_missing(item_id, name, cuisine, "all_candidates_failed_judge", "")
+    return False
 
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     food_dir = IMAGES_ROOT / "food"
+    use_judge = not getattr(args, "no_judge", False)
+    refetch_rejected = getattr(args, "refetch_rejected", False)
+
+    if use_judge and not check_ollama_available():
+        print("WARNING: --no-judge not set but Ollama unreachable. Pass --no-judge to skip judge gate.")
+        sys.exit(1)
+
+    if use_judge and refetch_rejected:
+        print("WARNING: judge active. Rejected items will only be saved if judge passes.")
 
     with db.db_connection(DB_PATH) as conn:
-        if args.force:
+        if refetch_rejected:
+            items = db.get_rejected_items(conn)
+        elif args.force:
             items = conn.execute(
-                "SELECT id, name, cuisine_type FROM food_items WHERE tagging_status='tagged'"
+                "SELECT id, name, description, cuisine_type FROM food_items WHERE tagging_status='tagged'"
             ).fetchall()
             items = [dict(r) for r in items]
         else:
@@ -199,12 +277,14 @@ def cmd_fetch(args: argparse.Namespace) -> None:
     if args.limit:
         items = items[: args.limit]
 
-    print(f"Processing {len(items)} items (dry_run={args.dry_run}, force={args.force})")
+    mode = "refetch-rejected" if refetch_rejected else ("force" if args.force else "normal")
+    print(f"Processing {len(items)} items (mode={mode}, dry_run={args.dry_run}, judge={use_judge})")
 
     success = 0
     with httpx.Client() as client:
         for item in items:
-            ok = process_one(item, client, food_dir, args.dry_run, args.force)
+            ok = process_one(item, client, food_dir, args.dry_run, args.force,
+                             use_judge=use_judge)
             if ok:
                 success += 1
 
@@ -368,6 +448,8 @@ def main() -> None:
     fetch_p.add_argument("--limit", type=int, default=0, help="Max items to process (0=all)")
     fetch_p.add_argument("--dry-run", action="store_true")
     fetch_p.add_argument("--force", action="store_true", help="Re-fetch items that already have images")
+    fetch_p.add_argument("--refetch-rejected", action="store_true", help="Re-fetch judge-rejected items")
+    fetch_p.add_argument("--no-judge", action="store_true", help="Skip judge gate (escape hatch when Ollama down)")
 
     sub.add_parser("manual", help="Process manually placed images")
 
@@ -380,6 +462,8 @@ def main() -> None:
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--manual", action="store_true")
     parser.add_argument("--placeholders", action="store_true")
+    parser.add_argument("--refetch-rejected", action="store_true")
+    parser.add_argument("--no-judge", action="store_true")
 
     args = parser.parse_args()
 
