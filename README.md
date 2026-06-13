@@ -138,6 +138,5 @@ Run the tests with `uv run pytest tests/ -v`.
 - **`docs/PROJECT.md`** — the research write-up: attribute schema, ingestion
   pipeline, and the full Thompson Sampling spec.
 - **`docs/CLAUDE.md`** — architecture, per-user model lifecycle, API reference.
-- **`docs/CONTEXT.md`** — domain glossary.
-- **`docs/adr/`** — architecture decision records.
+- **`docs/internal/`** — gitignored; domain glossary, ADRs, ops guides, AI agent configs.
 - **`ANDROID_HANDOFF.md`** — Android (Capacitor) build, env, and sideload guide.

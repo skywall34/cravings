@@ -14,7 +14,7 @@ wheels/
 .scratch/
 .pytest_cache/
 
-docs/
+docs/internal/
 
 frontend/node_modules/
 frontend/dist/
