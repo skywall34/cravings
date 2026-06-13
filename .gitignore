@@ -13,6 +13,7 @@ wheels/
 .claude/
 .scratch/
 .pytest_cache/
+.idea/
 
 docs/internal/
 

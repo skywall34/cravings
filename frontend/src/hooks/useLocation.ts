@@ -17,7 +17,7 @@ async function getNativeLocation(): Promise<Location> {
   if (perm.location === 'denied' && perm.coarseLocation === 'denied') {
     throw new Error('Location access denied — restaurant suggestions unavailable')
   }
-  const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: false })
+  const pos = await Geolocation.getCurrentPosition({ enableHighAccuracy: false, timeout: 15000, maximumAge: 300000 })
   return { lat: pos.coords.latitude, lng: pos.coords.longitude }
 }
 
