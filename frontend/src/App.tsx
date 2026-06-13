@@ -282,10 +282,6 @@ export default function App() {
         if (e.key === 'Enter' || e.key === 'ArrowRight') void handleDismissPanel()
         return
       }
-      if (screen === 'swipe') {
-        if (e.key === 'ArrowLeft') swipeCardRef.current?.swipe('left')
-        if (e.key === 'ArrowRight') swipeCardRef.current?.swipe('right')
-      }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)

@@ -34,11 +34,11 @@ App loads (returning visit, registered)
     → standard | vegetarian | vegan | restricted
 
 [ Swipe Card ]
-  ← Arrow Left / ✗ button  → Left-Swipe ("not today")
+  ← Drag left / ✗ button    → Left-Swipe ("not today")
                                → model updates (reward=0.3) → next card
   ← Long-press ✗ / "Never" button  → Hard Left-Swipe ("never")
                                → model updates (reward=0.0) → next card
-  → Arrow Right / ✓ button  → Right-Swipe (want this)
+  → Drag right / ✓ button   → Right-Swipe (want this)
                                → request location
                                → fetch nearby restaurants
                                → show Restaurant Panel
@@ -55,7 +55,7 @@ App loads (returning visit, registered)
 [ Repeat ]
 ```
 
-Keyboard-first design: ← and → arrow keys drive the whole loop. Buttons exist for touch/mobile.
+Touch-first design: drag the card left or right to swipe. Buttons (✗/✓/Never) provide an explicit tap alternative.
 
 ---
 
@@ -151,8 +151,6 @@ Single-column, centered, max-width `480px`. Designed mobile-first but works on d
 │  │                        │  │
 │  └────────────────────────┘  │
 │                              │
-│  ← arrow keys work too →     │  ← keyboard hint, faint
-│                              │
 └──────────────────────────────┘
 ```
 
@@ -168,9 +166,8 @@ The card should feel like a physical card — white, elevated, rounded corners (
 - **Subtitle row**: Cuisine type + key attribute tags (e.g. "Japanese · Spicy · Raw") in soft pill badges
 - **Description**: Optional 1–2 sentence excerpt in warm gray. Truncate if long.
 - **Buttons**: Two circles, 72px diameter. ✗ on left (red tint), ✓ on right (green tint). Scale up 10% on hover. Disabled state = 40% opacity.
-- **Keyboard hint**: "← / →  to swipe" in faint gray at bottom of card.
 
-**Swipe animation (future)**: Cards should slide/fade out in the swipe direction. For now, instant replace is acceptable.
+**Drag-to-swipe animation**: The card follows the drag gesture with tilt proportional to horizontal offset (±20° max). NOPE (red, top-left) and LIKE (green, top-right) overlays fade in as the card is dragged, reaching full opacity at ~80px of drag. Past a 120px CSS threshold the card flies off screen; below that threshold it springs back to center with cubic-bezier easing. `touchAction: none` prevents native scroll stealing on mobile.
 
 ---
 
@@ -236,9 +233,9 @@ border-top-color: #E85D04;
 | Onboarding complete | Submit sliders | `POST /api/onboarding`, model warm-started, first card loaded |
 | Mood changed | Selector tap/click | Updates `mood` param on next `GET /api/recommend` |
 | Dietary mode changed | Selector tap/click | Updates `dietary_mode` param on next `GET /api/recommend` |
-| Left-swipe ("not today") | ✗ button or ← key | Model updated (reward=0.3), next card |
+| Left-swipe ("not today") | ✗ button or drag left past threshold | Model updated (reward=0.3), next card |
 | Hard left-swipe ("never") | Long-press ✗ or "Never" button | Model updated (reward=0.0), next card |
-| Right-swipe | ✓ button or → key | Model updated (reward=1.0), location requested, restaurant panel shown |
+| Right-swipe | ✓ button or drag right past threshold | Model updated (reward=1.0), location requested, restaurant panel shown |
 | Dismiss panel | Button or Enter/→ key | Restaurant panel closed, next card |
 | Session end | After 10 swipes | Summary screen: right-swipe count + top cuisine; "New Session" (same prefs) + "Adjust Tastes →" (resets model, back to sliders) |
 
@@ -313,7 +310,7 @@ Two distinct negative signals.
 
 ## Future Design Considerations
 
-- **Swipe gesture on mobile**: Touch drag left/right on the card — natural mobile UX
+- ~~**Swipe gesture on mobile**: Touch drag left/right on the card — natural mobile UX~~ — **Implemented (Jun 2026)**. Tinder-style drag with tilt, NOPE/LIKE overlays, 120px fly-off threshold, spring snap-back. Keyboard arrow-key swipe removed (mobile-first).
 - **Food imagery**: Replace emoji placeholders with curated food photos
 - ~~**Edit dietary restrictions from profile**: `PATCH /api/users/me`~~ — **Implemented (May 2026)**. Partial update, unknown flags → 422.
 - **Google OAuth**: Add alongside email/password (ADR-0003 deferred to v2)

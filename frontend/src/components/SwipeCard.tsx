@@ -48,6 +48,7 @@ interface SwipeCardProps {
 }
 
 const ACCENT = '#E85D04'
+const SWIPE_THRESHOLD = 120
 
 export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function SwipeCard(
   { food, onSwipe, disabled, swipeCount, totalSwipes },
@@ -56,9 +57,14 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
   const [animDir, setAnimDir] = useState<SwipeDirection | null>(null)
   const [neverHeld, setNeverHeld] = useState(false)
   const [cuisineImgFailed, setCuisineImgFailed] = useState(false)
+  const [dragX, setDragX] = useState(0)
+  const [dragY, setDragY] = useState(0)
+  const [isDragging, setIsDragging] = useState(false)
 
   useEffect(() => { setCuisineImgFailed(false) }, [food.id])
   const neverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const dragStart = useRef<{ x: number; y: number } | null>(null)
+  const dragOriginatedOnButton = useRef(false)
 
   const handleSwipe = useCallback(
     (direction: SwipeDirection) => {
@@ -83,10 +89,65 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
     setNeverHeld(false)
   }
 
+  function handlePointerDown(clientX: number, clientY: number, target: EventTarget) {
+    if ((target as HTMLElement).closest('button, a')) {
+      dragOriginatedOnButton.current = true
+      return
+    }
+    dragOriginatedOnButton.current = false
+    if (animDir || disabled) return
+    dragStart.current = { x: clientX, y: clientY }
+    setIsDragging(true)
+    setDragX(0)
+    setDragY(0)
+  }
+
+  function handlePointerMove(clientX: number, clientY: number) {
+    if (!isDragging || !dragStart.current) return
+    setDragX(clientX - dragStart.current.x)
+    setDragY(clientY - dragStart.current.y)
+  }
+
+  function handlePointerUp() {
+    if (!isDragging) return
+    setIsDragging(false)
+    dragStart.current = null
+    if (Math.abs(dragX) >= SWIPE_THRESHOLD) {
+      handleSwipe(dragX > 0 ? 'right' : 'left')
+    }
+    setDragX(0)
+    setDragY(0)
+  }
+
+  useEffect(() => {
+    if (!isDragging) return
+    function onMouseMove(e: MouseEvent) { handlePointerMove(e.clientX, e.clientY) }
+    function onMouseUp() { handlePointerUp() }
+    function onTouchMove(e: TouchEvent) {
+      e.preventDefault()
+      handlePointerMove(e.touches[0].clientX, e.touches[0].clientY)
+    }
+    function onTouchEnd() { handlePointerUp() }
+    window.addEventListener('mousemove', onMouseMove)
+    window.addEventListener('mouseup', onMouseUp)
+    window.addEventListener('touchmove', onTouchMove, { passive: false })
+    window.addEventListener('touchend', onTouchEnd)
+    return () => {
+      window.removeEventListener('mousemove', onMouseMove)
+      window.removeEventListener('mouseup', onMouseUp)
+      window.removeEventListener('touchmove', onTouchMove)
+      window.removeEventListener('touchend', onTouchEnd)
+    }
+  }, [isDragging, dragX])
+
   const cuisine = food.cuisine_type?.toLowerCase() ?? ''
   const emoji = CUISINE_EMOJI[cuisine] ?? '🍽️'
   const bgColor = CUISINE_BG[cuisine] ?? '#FFF4EC'
   const tags = buildTags(food)
+
+  const dragRotation = isDragging ? Math.max(-20, Math.min(20, dragX / 10)) : 0
+  const nopeOpacity  = isDragging ? Math.max(0, Math.min(1, -dragX / 80)) : 0
+  const likeOpacity  = isDragging ? Math.max(0, Math.min(1,  dragX / 80)) : 0
 
   // Progress dots: filled up to swipeCount, current dot = swipeCount, rest empty
   const dots = Array.from({ length: totalSwipes }, (_, i) => {
@@ -110,24 +171,35 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
       </div>
 
       {/* Card */}
-      <div style={{
-        background: bgColor,
-        borderRadius: 24,
-        boxShadow: '0 8px 40px rgba(232, 93, 4, 0.12), 0 2px 8px rgba(0,0,0,0.06)',
-        overflow: 'hidden',
-        width: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        transform: animDir === 'left' || animDir === 'never'
-          ? 'translateX(-120%) rotate(-15deg)'
-          : animDir === 'right'
-          ? 'translateX(120%) rotate(15deg)'
-          : 'translateX(0) rotate(0deg)',
-        opacity: animDir ? 0 : 1,
-        transition: animDir
-          ? 'transform 0.38s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease'
-          : 'none',
-      }}>
+      <div
+        onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, e.target)}
+        onTouchStart={(e) => handlePointerDown(e.touches[0].clientX, e.touches[0].clientY, e.target)}
+        style={{
+          background: bgColor,
+          borderRadius: 24,
+          boxShadow: '0 8px 40px rgba(232, 93, 4, 0.12), 0 2px 8px rgba(0,0,0,0.06)',
+          overflow: 'hidden',
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          cursor: isDragging ? 'grabbing' : disabled ? 'default' : 'grab',
+          touchAction: 'none',
+          userSelect: 'none',
+          WebkitUserSelect: 'none',
+          transform: animDir === 'left' || animDir === 'never'
+            ? 'translateX(-120%) rotate(-15deg)'
+            : animDir === 'right'
+            ? 'translateX(120%) rotate(15deg)'
+            : isDragging
+            ? `translateX(${dragX}px) translateY(${dragY * 0.15}px) rotate(${dragRotation}deg)`
+            : 'translateX(0) rotate(0deg)',
+          opacity: animDir ? 0 : 1,
+          transition: animDir
+            ? 'transform 0.38s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease'
+            : isDragging
+            ? 'none'
+            : 'transform 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275)',
+        }}>
 
         {/* Food visual */}
         {food.image_url_400 ? (
@@ -282,24 +354,21 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           </div>
         </div>
 
-        <p style={{ textAlign: 'center', fontSize: '0.75rem', color: '#B0A89E', margin: '12px 0 12px', letterSpacing: '0.02em' }}>
-          ← / → arrow keys · hold ✕ for Never
-        </p>
         <AllergenNote style={{ margin: '0 0 16px' }} />
       </div>
 
       {/* Overlays */}
-      {animDir === 'left' && (
-        <div style={{
-          position: 'absolute', top: 60, left: 28, fontSize: '2.2rem',
-          fontWeight: 900, letterSpacing: '0.08em', padding: '8px 20px',
-          borderRadius: 12, border: '3.5px solid #DC2626', color: '#DC2626',
-          background: 'rgba(220,38,38,0.05)', pointerEvents: 'none', zIndex: 10,
-          transform: 'rotate(-10deg)',
-        }}>
-          NOPE
-        </div>
-      )}
+      <div style={{
+        position: 'absolute', top: 60, left: 28, fontSize: '2.2rem',
+        fontWeight: 900, letterSpacing: '0.08em', padding: '8px 20px',
+        borderRadius: 12, border: '3.5px solid #DC2626', color: '#DC2626',
+        background: 'rgba(220,38,38,0.05)', pointerEvents: 'none', zIndex: 10,
+        transform: 'rotate(-10deg)',
+        opacity: animDir === 'left' ? 1 : nopeOpacity,
+        transition: isDragging ? 'none' : 'opacity 0.15s ease',
+      }}>
+        NOPE
+      </div>
       {animDir === 'never' && (
         <div style={{
           position: 'absolute', top: 60, left: 28, fontSize: '2.2rem',
@@ -311,17 +380,17 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           NEVER
         </div>
       )}
-      {animDir === 'right' && (
-        <div style={{
-          position: 'absolute', top: 60, right: 28, fontSize: '2.2rem',
-          fontWeight: 900, letterSpacing: '0.08em', padding: '8px 20px',
-          borderRadius: 12, border: '3.5px solid #16A34A', color: '#16A34A',
-          background: 'rgba(22,163,74,0.05)', pointerEvents: 'none', zIndex: 10,
-          transform: 'rotate(10deg)',
-        }}>
-          LIKE
-        </div>
-      )}
+      <div style={{
+        position: 'absolute', top: 60, right: 28, fontSize: '2.2rem',
+        fontWeight: 900, letterSpacing: '0.08em', padding: '8px 20px',
+        borderRadius: 12, border: '3.5px solid #16A34A', color: '#16A34A',
+        background: 'rgba(22,163,74,0.05)', pointerEvents: 'none', zIndex: 10,
+        transform: 'rotate(10deg)',
+        opacity: animDir === 'right' ? 1 : likeOpacity,
+        transition: isDragging ? 'none' : 'opacity 0.15s ease',
+      }}>
+        LIKE
+      </div>
     </div>
   )
 })
