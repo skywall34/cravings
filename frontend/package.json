@@ -8,6 +8,7 @@
     "build": "vite build",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "preview": "vite preview",
     "build:android": "vite build --mode capacitor --base / && cap sync android",
     "open:android": "cap open android"
@@ -32,6 +33,7 @@
     "globals": "^17.5.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.59.1",
-    "vite": "^5.4.21"
+    "vite": "^5.4.21",
+    "vitest": "^4.1.8"
   }
 }

@@ -1,14 +1,16 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getRecommendation, recordSwipe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError } from './api'
+import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
 import * as storage from './storage'
 import { useLocation } from './hooks/useLocation'
+import { useLocationConsent } from './hooks/useLocationConsent'
+import { useRecommender } from './hooks/useRecommender'
+import { SESSION_MAX } from './recommender/recommender'
 import { SwipeCard } from './components/SwipeCard'
 import type { SwipeCardHandle } from './components/SwipeCard'
 import { RestaurantPanel } from './components/RestaurantPanel'
 import { OnboardingScreen } from './components/OnboardingScreen'
 import { SessionSummary } from './components/SessionSummary'
-import type { SwipeEntry } from './components/SessionSummary'
 import { MoodSelector } from './components/MoodSelector'
 import type { MoodOption, DietOption } from './components/MoodSelector'
 import { moodToApi, dietToApi } from './components/MoodSelector'
@@ -18,16 +20,10 @@ import { RegisterForm } from './components/RegisterForm'
 import { ProfilePage } from './components/ProfilePage'
 import { ConsentBanner } from './components/ConsentBanner'
 import { LegalPage } from './components/LegalPages'
+import { LocationConsentModal } from './components/LocationConsentModal'
 import './App.css'
 
-const LOCATION_CONSENT_KEY = 'cravings_location_consent'
-
-const SESSION_MAX = 10
 const DIETARY_KEY = 'cravings_dietary'
-
-function randomId(): string {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36)
-}
 
 const EMPTY_DIETARY: GuestPrefs = { dietaryRestrictions: [], safetyOverrides: [], tastePrefs: {} }
 
@@ -90,7 +86,6 @@ function SessionProgress({ count, total }: SessionProgressProps) {
 type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile' | 'privacy' | 'terms'
 
 export default function App() {
-  const sessionId = useRef(randomId())
   const swipeCardRef = useRef<SwipeCardHandle | null>(null)
 
   const [screen, setScreen] = useState<Screen>('swipe')
@@ -102,16 +97,18 @@ export default function App() {
   const [rateLimitedSeconds, setRateLimitedSeconds] = useState<number | null>(null)
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null)
   const [swiping, setSwiping] = useState(false)
-  const [swipeHistory, setSwipeHistory] = useState<SwipeEntry[]>([])
   const [cardKey, setCardKey] = useState(0)
   const [mood, setMood] = useState<MoodOption>('Any')
   const [dietary, setDietary] = useState<DietOption>('Standard')
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
-  const seenIds = useRef<number[]>([])
-  const [locationConsentPending, setLocationConsentPending] = useState<(() => void) | null>(null)
+
+  // Recommender seam: owns Swipe Session state (sessionId, seenIds, history) and
+  // the Guest/Registered split. App never branches on identity for recommend/swipe.
+  const { rec, history: swipeHistory, count: swipeCount } = useRecommender(currentUser, guestDietary)
 
   const { requestLocation } = useLocation()
+  const { needsConsent, gate, allow, deny } = useLocationConsent()
 
   function navigateTo(next: Screen) {
     setPrevScreen(screen)
@@ -122,16 +119,12 @@ export default function App() {
     setScreen(prevScreen === screen ? 'swipe' : prevScreen)
   }
 
-  const swipeCount = swipeHistory.length
-
   useEffect(() => {
     // Route a server 401 (expired/invalid token) back to onboarding instead of
     // window.location.reload(), which is a no-op inside the Capacitor WebView.
+    // Clearing currentUser flips identity → the seam rebuilds a fresh session.
     setSessionExpiredHandler(() => {
       setCurrentUser(null)
-      seenIds.current = []
-      setSwipeHistory([])
-      sessionId.current = randomId()
       setScreen('onboarding')
     })
   }, [])
@@ -170,15 +163,12 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const guestPrefs = currentUser === null
-        ? { ...guestDietary, excludedIds: seenIds.current }
-        : undefined
-      const recs = await getRecommendation(sessionId.current, moodToApi(mood), dietToApi(dietary), 1, guestPrefs)
-      if (!recs || recs.length === 0) {
+      const next = await rec.next({ mood: moodToApi(mood), dietary: dietToApi(dietary) })
+      if (!next) {
         setFood(null)
         setError('No more items available.')
       } else {
-        setFood(recs[0])
+        setFood(next)
         setCardKey(k => k + 1)
       }
     } catch (e) {
@@ -197,12 +187,10 @@ export default function App() {
       } catch { /* non-fatal */ }
     }
     // Reset session so post-adjust session starts clean (also harmless on first-run onboarding)
-    sessionId.current = randomId()
-    seenIds.current = []
-    setSwipeHistory([])
+    rec.reset()
     setScreen('swipe')
     await loadNextCard()
-  }, [mood, dietary, currentUser])
+  }, [mood, dietary, currentUser, rec])
 
   const handleOnboardingSkip = useCallback(async (dietary: GuestPrefs) => {
     await saveDietaryToStorage(dietary)
@@ -212,9 +200,7 @@ export default function App() {
   }, [mood, dietary])
 
   async function handleNewSession() {
-    sessionId.current = randomId()
-    seenIds.current = []
-    setSwipeHistory([])
+    rec.reset()
     setScreen('swipe')
     await loadNextCard()
   }
@@ -225,16 +211,9 @@ export default function App() {
     const swipedFood = food
 
     try {
-      const guestPrefs = currentUser === null ? guestDietary : undefined
-      if (currentUser === null) {
-        seenIds.current = [...seenIds.current, Number(swipedFood.id)]
-      }
-      const result = await recordSwipe(swipedFood.id, direction, sessionId.current, swipedFood.snapshot_token, guestPrefs)
+      const outcome = await rec.swipe(swipedFood, direction)
 
-      const newHistory = [...swipeHistory, { food: swipedFood, direction }]
-      setSwipeHistory(newHistory)
-
-      if (result.session_complete || newHistory.length >= SESSION_MAX) {
+      if (outcome.sessionComplete) {
         setScreen('summary')
         return
       }
@@ -260,12 +239,7 @@ export default function App() {
           }
         }
 
-        const hasConsent = await storage.get(LOCATION_CONSENT_KEY)
-        if (hasConsent) {
-          await doNearby()
-        } else {
-          setLocationConsentPending(() => doNearby)
-        }
+        await gate(doNearby, () => setRestaurants([]))
       } else {
         await loadNextCard()
       }
@@ -274,7 +248,7 @@ export default function App() {
     } finally {
       setSwiping(false)
     }
-  }, [food, swiping, swipeHistory, requestLocation, mood, dietary])
+  }, [food, swiping, rec, requestLocation, gate, mood, dietary])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -296,10 +270,8 @@ export default function App() {
 
   async function handleLogout() {
     await logout()
+    // Clearing currentUser flips identity → the seam rebuilds a fresh session.
     setCurrentUser(null)
-    seenIds.current = []
-    setSwipeHistory([])
-    sessionId.current = randomId()
     setGuestDietary(await loadDietaryFromStorage())
     setScreen('onboarding')
   }
@@ -354,10 +326,8 @@ export default function App() {
           user={currentUser}
           onBack={navigateBack}
           onDeleteAccount={() => {
+            // Identity flip rebuilds a fresh session via the seam.
             setCurrentUser(null)
-            seenIds.current = []
-            setSwipeHistory([])
-            sessionId.current = randomId()
             setGuestDietary(EMPTY_DIETARY)
             setScreen('onboarding')
           }}
@@ -438,73 +408,12 @@ export default function App() {
       )}
 
       {/* Location consent overlay — shown before first nearby lookup */}
-      {locationConsentPending && (
-        <div style={{
-          position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
-          display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-          zIndex: 8000, padding: '0 12px 24px',
-        }}>
-          <div style={{
-            width: '100%', maxWidth: 480, background: '#fff',
-            borderRadius: 20, padding: '24px 20px 20px',
-            boxShadow: '0 20px 60px rgba(0,0,0,0.25)',
-          }}>
-            <div style={{ textAlign: 'center', marginBottom: 16 }}>
-              <div style={{
-                width: 56, height: 56, borderRadius: '50%',
-                background: 'rgba(232,93,4,0.10)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 28, margin: '0 auto 12px',
-              }}>📍</div>
-              <h3 style={{ margin: '0 0 6px', fontSize: '1.1rem', fontWeight: 800, color: '#1A1A1A' }}>
-                Use your location?
-              </h3>
-              <p style={{ margin: '0 auto', maxWidth: 320, fontSize: '0.86rem', lineHeight: 1.55, color: '#6B6B6B' }}>
-                Cravings uses your approximate location to find nearby restaurants. We don't store
-                precise coordinates.{' '}
-                <button
-                  onClick={() => openLegal('privacy')}
-                  style={{ background: 'none', border: 'none', padding: 0, color: '#E85D04', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit', fontSize: '0.86rem', textDecoration: 'underline', textUnderlineOffset: 2 }}
-                >
-                  Privacy Policy
-                </button>.
-              </p>
-            </div>
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              <button
-                onClick={() => {
-                  void storage.set(LOCATION_CONSENT_KEY, 'granted')
-                  const fn = locationConsentPending
-                  setLocationConsentPending(null)
-                  void fn()
-                }}
-                style={{
-                  width: '100%', padding: '13px', background: '#E85D04', color: '#fff',
-                  border: 'none', borderRadius: 100, fontSize: '0.95rem', fontWeight: 700,
-                  cursor: 'pointer', fontFamily: 'inherit',
-                  boxShadow: '0 4px 16px rgba(232,93,4,0.33)',
-                }}
-              >
-                Allow location
-              </button>
-              <button
-                onClick={() => {
-                  void storage.set(LOCATION_CONSENT_KEY, 'denied')
-                  setLocationConsentPending(null)
-                  setRestaurants([])
-                }}
-                style={{
-                  width: '100%', padding: '11px', background: 'transparent',
-                  color: '#6B6B6B', border: 'none', borderRadius: 100,
-                  fontSize: '0.88rem', fontWeight: 700, cursor: 'pointer', fontFamily: 'inherit',
-                }}
-              >
-                Not now
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <LocationConsentModal
+        open={needsConsent}
+        onAllow={() => void allow()}
+        onDeny={() => void deny()}
+        onOpenPrivacy={() => openLegal('privacy')}
+      />
 
       {/* Footer */}
       <footer style={{

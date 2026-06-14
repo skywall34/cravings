@@ -13,8 +13,8 @@ from pathlib import Path
 mimetypes.add_type("image/webp", ".webp")
 
 from dotenv import load_dotenv
-from email_validator import EmailNotValidError, validate_email
 from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -30,6 +30,17 @@ from model_server.recommendation_service import ModelServer
 from places import PlacesAdapter, PlacesError
 from rate_limit import RateLimiter
 from recommender import make_recommender
+from schemas import (
+    AuthResultOut,
+    LoginBody,
+    OnboardingBody,
+    PasswordBody,
+    PatchMeBody,
+    RegisterBody,
+    SessionResetBody,
+    SwipeBody,
+    UserInfoOut,
+)
 from tagging import safety
 from tagging.client import tag_food_item
 
@@ -71,6 +82,20 @@ async def lifespan(app: FastAPI):
 _base_path = os.environ.get("BASE_PATH", "")
 
 app = FastAPI(lifespan=lifespan, root_path=_base_path)
+
+
+@app.exception_handler(RequestValidationError)
+async def _flatten_validation_error(request: Request, exc: RequestValidationError):
+    """Reshape FastAPI's structured 422 (a list) into {"detail": "<string>"}.
+
+    Shipped clients (incl. Android APKs) parse `detail` as a string, so request
+    validation must keep that shape rather than emitting the default error list.
+    """
+    errors = exc.errors()
+    msg = errors[0].get("msg", "invalid request") if errors else "invalid request"
+    if msg.startswith("Value error, "):
+        msg = msg[len("Value error, "):]
+    return JSONResponse(status_code=422, content={"detail": msg})
 
 # The Capacitor Android WebView serves bundled assets from https://localhost
 # (androidScheme: https) and calls this API cross-origin. The production web app
@@ -146,50 +171,26 @@ async def health():
 
 
 
-@app.get("/api/users/me")
+@app.get("/api/users/me", response_model=UserInfoOut)
 async def get_me(user=Depends(_get_user)):
-    return {
-        "id": user["id"],
-        "name": user["name"],
-        "email": user["email"],
-        "is_registered": user["email"] is not None,
-        "dietary_restrictions": safety.dietary_list_from_bitmask(user["dietary_flags_bitmask"]),
-        "safety_overrides": safety.safety_list_from_bitmask(user["safety_overrides_bitmask"]),
-        "onboarding_complete": bool(user["onboarding_complete"]),
-    }
+    return UserInfoOut.of(user)
 
 
-@app.patch("/api/users/me")
-async def patch_me(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
-    _VALID_DIETARY = set(safety.DIETARY_FLAGS)
-    _VALID_SAFETY = set(safety.SAFETY_FLAGS)
-
-    if "dietary_restrictions" in body:
-        unknown = set(body["dietary_restrictions"]) - _VALID_DIETARY
-        if unknown:
-            raise HTTPException(status_code=422, detail=f"unknown dietary flags: {sorted(unknown)}")
-        diet_mask = safety.compute_dietary_bitmask(body["dietary_restrictions"])
-    else:
-        diet_mask = user["dietary_flags_bitmask"]
-
-    if "safety_overrides" in body:
-        unknown = set(body["safety_overrides"]) - _VALID_SAFETY
-        if unknown:
-            raise HTTPException(status_code=422, detail=f"unknown safety flags: {sorted(unknown)}")
-        safety_mask = safety.compute_safety_bitmask(body["safety_overrides"])
-    else:
-        safety_mask = user["safety_overrides_bitmask"]
-
+@app.patch("/api/users/me", response_model=UserInfoOut)
+async def patch_me(body: PatchMeBody, user=Depends(_get_user), conn=Depends(_get_conn)):
+    # None = field omitted → keep existing; validators already rejected bad flags.
+    diet_mask = (
+        safety.compute_dietary_bitmask(body.dietary_restrictions)
+        if body.dietary_restrictions is not None
+        else user["dietary_flags_bitmask"]
+    )
+    safety_mask = (
+        safety.compute_safety_bitmask(body.safety_overrides)
+        if body.safety_overrides is not None
+        else user["safety_overrides_bitmask"]
+    )
     db.update_user_dietary(conn, user["id"], diet_mask, safety_mask)
-    return {
-        "id": user["id"],
-        "name": user["name"],
-        "email": user["email"],
-        "is_registered": user["email"] is not None,
-        "dietary_restrictions": safety.dietary_list_from_bitmask(diet_mask),
-        "safety_overrides": safety.safety_list_from_bitmask(safety_mask),
-        "onboarding_complete": bool(user["onboarding_complete"]),
-    }
+    return UserInfoOut.of(user, dietary_mask=diet_mask, safety_mask=safety_mask)
 
 
 @app.delete("/api/users/me", status_code=204)
@@ -231,12 +232,8 @@ async def export_me(user=Depends(_get_user), conn=Depends(_get_conn)):
 
 
 @app.post("/api/onboarding")
-async def onboarding(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
-    prefs = body.get("preferences") or {}
-    if not prefs:
-        raise HTTPException(status_code=400, detail="preferences required")
-    reset = bool(body.get("reset", False))
-    await asyncio.to_thread(_model_service.set_onboarding, user["id"], prefs, reset)
+async def onboarding(body: OnboardingBody, user=Depends(_get_user), conn=Depends(_get_conn)):
+    await asyncio.to_thread(_model_service.set_onboarding, user["id"], body.preferences, body.reset)
     db.mark_onboarding_complete(conn, user["id"])
     return {"success": True}
 
@@ -280,16 +277,11 @@ async def recommend(
 
 @app.post("/api/swipe")
 async def swipe_endpoint(
-    body: dict,
+    body: SwipeBody,
     credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
     conn=Depends(_get_conn),
 ):
-    food_item_id = body.get("food_item_id")
-    direction = body.get("direction")
-    session_id = body.get("session_id") or ""
-    token = body.get("snapshot_token") or ""
-
-    item = db.get_food_item(conn, food_item_id)
+    item = db.get_food_item(conn, body.food_item_id)
     if item is None:
         raise HTTPException(status_code=404, detail="food item not found")
 
@@ -299,11 +291,11 @@ async def swipe_endpoint(
 
     rec = make_recommender(
         conn=conn, user=user, sessions=_sessions, model_service=_model_service,
-        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=session_id,
-        taste_prefs=body.get("taste_prefs") or {},
+        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=body.session_id,
+        taste_prefs=body.taste_prefs,
     )
     try:
-        outcome = await rec.record(item=item, direction=direction, token=token)
+        outcome = await rec.record(item=item, direction=body.direction, token=body.snapshot_token)
     except swipe.SnapshotError as e:
         raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
     except swipe.SwipeError as e:
@@ -312,9 +304,8 @@ async def swipe_endpoint(
 
 
 @app.post("/api/session/reset")
-async def session_reset(body: dict):
-    session_id = body.get("session_id") or ""
-    await _sessions.reset(session_id)
+async def session_reset(body: SessionResetBody):
+    await _sessions.reset(body.session_id)
     return {"success": True}
 
 
@@ -380,57 +371,32 @@ async def nearby(
 # Auth routes
 # ---------------------------------------------------------------------------
 
-def _validate_email(raw: str) -> str:
-    try:
-        return validate_email(raw, check_deliverability=False).normalized
-    except EmailNotValidError as e:
-        raise HTTPException(status_code=400, detail=f"invalid email: {e}") from e
-
-
-@app.post("/api/auth/register", status_code=201)
-async def auth_register(body: dict, conn=Depends(_get_conn)):
-    email = _validate_email((body.get("email") or "").strip())
-    password = (body.get("password") or "").strip()
-    name = (body.get("name") or "").strip()
-    if not password or len(password) < 8:
-        raise HTTPException(status_code=400, detail="password must be at least 8 characters")
-    if not name:
-        raise HTTPException(status_code=400, detail="name required")
-
-    existing = db.get_user_by_email(conn, email)
+@app.post("/api/auth/register", status_code=201, response_model=AuthResultOut)
+async def auth_register(body: RegisterBody, conn=Depends(_get_conn)):
+    # email/password/name already normalized + validated by RegisterBody.
+    existing = db.get_user_by_email(conn, body.email)
     if existing:
         raise HTTPException(status_code=409, detail="email already registered, please log in")
 
-    password_hash = db.hash_password(password)
-    user_id, token = db.create_registered_user(conn, email, password_hash, name)
-    return {
-        "id": user_id,
-        "name": name,
-        "email": email,
-        "api_token": token,
-        "is_registered": True,
-        "onboarding_complete": False,
-    }
+    password_hash = db.hash_password(body.password)
+    user_id, token = db.create_registered_user(conn, body.email, password_hash, body.name)
+    return AuthResultOut(
+        id=user_id, name=body.name, email=body.email, api_token=token,
+        is_registered=True, onboarding_complete=False,
+    )
 
 
-@app.post("/api/auth/login")
-async def auth_login(body: dict, conn=Depends(_get_conn)):
-    email = _validate_email((body.get("email") or "").strip())
-    password = (body.get("password") or "").strip()
-
-    user = db.get_user_by_email(conn, email)
-    if not user or not user["password_hash"] or not db.verify_password(password, user["password_hash"]):
+@app.post("/api/auth/login", response_model=AuthResultOut)
+async def auth_login(body: LoginBody, conn=Depends(_get_conn)):
+    user = db.get_user_by_email(conn, body.email)
+    if not user or not user["password_hash"] or not db.verify_password(body.password.strip(), user["password_hash"]):
         await asyncio.sleep(0.25)
         raise HTTPException(status_code=401, detail="invalid email or password")
 
-    return {
-        "id": user["id"],
-        "name": user["name"],
-        "email": user["email"],
-        "api_token": user["api_token"],
-        "is_registered": True,
-        "onboarding_complete": bool(user["onboarding_complete"]),
-    }
+    return AuthResultOut(
+        id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
+        is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
+    )
 
 
 @app.post("/api/auth/logout")
@@ -440,11 +406,11 @@ async def auth_logout(user=Depends(_get_user), conn=Depends(_get_conn)):
 
 
 @app.post("/api/auth/password")
-async def auth_change_password(body: dict, user=Depends(_get_user), conn=Depends(_get_conn)):
+async def auth_change_password(body: PasswordBody, user=Depends(_get_user), conn=Depends(_get_conn)):
     if not user["password_hash"]:
         raise HTTPException(status_code=400, detail="guest users cannot change password")
-    old_password = (body.get("old_password") or "").strip()
-    new_password = (body.get("new_password") or "").strip()
+    old_password = body.old_password.strip()
+    new_password = body.new_password.strip()
     if not db.verify_password(old_password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="incorrect current password")
     if len(new_password) < 8:

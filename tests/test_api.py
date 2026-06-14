@@ -172,7 +172,7 @@ async def test_onboarding(auth_client):
 async def test_onboarding_empty_prefs(auth_client):
     client, _, _ = auth_client
     resp = await client.post("/api/onboarding", json={"preferences": {}})
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +256,7 @@ async def test_swipe_invalid_direction(auth_client):
         "session_id": "s1",
         "snapshot_token": token,
     })
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 async def test_swipe_unknown_item(auth_client):

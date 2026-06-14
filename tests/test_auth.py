@@ -99,7 +99,7 @@ async def test_register_short_password(client):
         "password": "short",
         "name": "Dave",
     })
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 async def test_register_invalid_email(client):
@@ -109,7 +109,7 @@ async def test_register_invalid_email(client):
         "password": "securepass4",
         "name": "Eve",
     })
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 # ---------------------------------------------------------------------------

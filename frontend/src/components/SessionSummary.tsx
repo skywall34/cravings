@@ -1,14 +1,11 @@
-import type { FoodItem, SwipeDirection } from '../api'
+import type { SwipeEntry } from '../recommender/recommender'
+
+export type { SwipeEntry }
 
 const CUISINE_EMOJI: Record<string, string> = {
   japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
   american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
   chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
-}
-
-export interface SwipeEntry {
-  food: FoodItem
-  direction: SwipeDirection
 }
 
 interface SessionSummaryProps {
