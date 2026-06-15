@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # Smoke test against live VPS. Usage: ./scripts/smoke_test_vps.sh [base_url]
 # Default base_url: https://themshin.com/cravings
+#
+# Registers a throwaway user (ADR-0005 removed the guest-row POST /api/users),
+# exercises the recommend/swipe/stats flow, then deletes the user so prod is left
+# clean. mood / dietary_mode were dropped from the model in ADR-0013 — this script
+# asserts they're gone from stats and that legacy clients still sending them get 200.
 
 BASE="${1:-https://themshin.com/cravings}"
 API="$BASE/api"
@@ -16,21 +21,33 @@ section "Health"
 STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$API/health")
 [ "$STATUS" = "200" ] && ok "GET /api/health → 200" || fail "GET /api/health → $STATUS"
 
-# ── 2. Create guest user ─────────────────────────────────────────────────────
+# ── 2. Register throwaway user (ADR-0005: no guest DB row) ────────────────────
 section "Auth"
-USER=$(curl -s -X POST "$API/users" \
+EMAIL="smoke-$$-$(date +%s)@example.com"
+USER=$(curl -s -X POST "$API/auth/register" \
   -H "Content-Type: application/json" \
-  -d '{"name":"smoke-test"}')
+  -d "{\"email\":\"$EMAIL\",\"password\":\"smoke-password-123\",\"name\":\"smoke-test\"}")
 TOKEN=$(echo "$USER" | python3 -c "import sys,json; print(json.load(sys.stdin).get('api_token',''))")
 USER_ID=$(echo "$USER" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id',''))")
-[ -n "$TOKEN" ] && ok "POST /api/users → got token (user_id=$USER_ID)" || { fail "POST /api/users failed: $USER"; exit 1; }
+[ -n "$TOKEN" ] && ok "POST /api/auth/register → got token (user_id=$USER_ID)" || { fail "POST /api/auth/register failed: $USER"; exit 1; }
 
 AUTH="Authorization: Bearer $TOKEN"
+
+# Always delete the throwaway user on exit, even if a check fails mid-run.
+cleanup() {
+  if [ -n "$TOKEN" ]; then
+    DEL=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE "$API/users/me" -H "$AUTH")
+    echo; echo "── Cleanup ──"
+    [ "$DEL" = "204" ] && echo "  ✓ DELETE /api/users/me → 204 (throwaway user removed)" \
+                       || echo "  ✗ DELETE /api/users/me → $DEL (manual cleanup of $EMAIL may be needed)"
+  fi
+}
+trap cleanup EXIT
 
 # ── 3. Recommend ─────────────────────────────────────────────────────────────
 section "Recommend"
 SESSION="smoke-$$"
-REC=$(curl -s "$API/recommend?session_id=$SESSION&mood=no_preference&dietary_mode=standard" \
+REC=$(curl -s "$API/recommend?session_id=$SESSION" \
   -H "$AUTH")
 ITEM_ID=$(echo "$REC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if isinstance(d,list) and d else d.get('id',''))" 2>/dev/null)
 SNAP=$(echo "$REC" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('snapshot_token',''))" 2>/dev/null)
@@ -52,7 +69,7 @@ fi
 # ── 5. Do 4 more swipes to reach 5 and trigger cuisine prior seed ─────────────
 section "Cuisine prior seed (swipe 5 trigger)"
 for i in 2 3 4 5; do
-  REC=$(curl -s "$API/recommend?session_id=$SESSION&mood=no_preference&dietary_mode=standard" \
+  REC=$(curl -s "$API/recommend?session_id=$SESSION" \
     -H "$AUTH")
   IID=$(echo "$REC" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d[0]['id'] if isinstance(d,list) and d else '')" 2>/dev/null)
   SN=$(echo "$REC" | python3 -c "import sys,json; d=json.load(sys.stdin); r=d[0] if isinstance(d,list) else d; print(r.get('snapshot_token',''))" 2>/dev/null)
@@ -75,6 +92,29 @@ section "Model status"
 STATUS_JSON=$(curl -s "$API/model/status" -H "$AUTH")
 TS=$(echo "$STATUS_JSON" | python3 -c "import sys,json; print(json.load(sys.stdin).get('total_swipes','?'))")
 [ "$TS" = "5" ] && ok "GET /api/model/status → total_swipes=$TS" || fail "GET /api/model/status unexpected: $STATUS_JSON"
+
+# ── 6b. ADR-0013 regression: mood/dietary_mode dropped ────────────────────────
+section "ADR-0013 (mood / dietary_mode removed)"
+
+# Stats must no longer expose mood_breakdown.
+STATS=$(curl -s "$API/profile/stats" -H "$AUTH")
+HAS_MOOD=$(echo "$STATS" | python3 -c "import sys,json; print('mood_breakdown' in json.load(sys.stdin))" 2>/dev/null)
+[ "$HAS_MOOD" = "False" ] && ok "GET /api/profile/stats has no mood_breakdown" || fail "stats still exposes mood_breakdown: $STATS"
+
+# Recommend snapshot must not carry a mood field.
+SNAP_HAS_MOOD=$(echo "$REC" | python3 -c "
+import sys, json, base64
+d = json.load(sys.stdin); r = d[0] if isinstance(d, list) else d
+tok = r.get('snapshot_token', '')
+payload = base64.urlsafe_b64decode(tok.split('.')[0] + '==').decode() if tok else '{}'
+print('mood' in json.loads(payload))
+" 2>/dev/null)
+[ "$SNAP_HAS_MOOD" = "False" ] && ok "recommend snapshot carries no mood field" || fail "snapshot still carries mood"
+
+# Legacy clients (shipped APKs) still sending mood/dietary_mode must get 200.
+LEGACY=$(curl -s -o /dev/null -w "%{http_code}" \
+  "$API/recommend?session_id=$SESSION-legacy&mood=comfort&dietary_mode=vegan&top_n=1" -H "$AUTH")
+[ "$LEGACY" = "200" ] && ok "legacy mood/dietary_mode query params → 200 (ignored)" || fail "legacy params → $LEGACY"
 
 # ── 7. Check recent_likes persisted ──────────────────────────────────────────
 section "Embedding / recent_likes (DB check on VPS)"
