@@ -36,8 +36,6 @@ class Recommender(Protocol):
     async def recommend(
         self,
         *,
-        mood: str,
-        dietary_mode: str,
         hour: float | None,
         top_n: int,
         excluded_ids: list[int],
@@ -74,9 +72,9 @@ class RegisteredRecommender:
         self._user = user
         self._session_id = session_id
 
-    async def recommend(self, *, mood, dietary_mode, hour, top_n, excluded_ids) -> list[dict]:
+    async def recommend(self, *, hour, top_n, excluded_ids) -> list[dict]:
         snapshot, candidates = await swipe.build_intake(
-            self._conn, self._sessions, self._user, dietary_mode, mood, hour, self._session_id
+            self._conn, self._sessions, self._user, hour, self._session_id
         )
         if not candidates:
             return []
@@ -134,11 +132,11 @@ class GuestRecommender:
             await self._sessions.set_model(self._session_id, model)
         return model
 
-    async def recommend(self, *, mood, dietary_mode, hour, top_n, excluded_ids) -> list[dict]:
+    async def recommend(self, *, hour, top_n, excluded_ids) -> list[dict]:
         snapshot, candidates = await swipe.build_guest_intake(
             self._conn, self._sessions, self._session_id,
             self._dietary_restrictions, self._safety_overrides,
-            dietary_mode, mood, hour, top_n, extra_excluded=excluded_ids,
+            hour, top_n, extra_excluded=excluded_ids,
         )
         if not candidates:
             return []

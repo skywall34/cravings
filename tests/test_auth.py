@@ -246,7 +246,6 @@ async def test_stats_empty(client):
     assert data["total_swipes"] == 0
     assert data["cuisine_breakdown"] == []
     assert data["avg_swipes_to_right"] is None
-    assert data["mood_breakdown"] == []
     fp = data["flavor_profile"]
     assert set(fp.keys()) == {"Spicy", "Rich", "Umami", "Fresh", "Sweet"}
     assert all(v == 0 for v in fp.values())

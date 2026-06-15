@@ -96,7 +96,7 @@ const PRIVACY_SECTIONS: Section[] = [
       'When you use Cravings, we collect the following:',
       [
         'Account details — your name and email address when you register.',
-        'Taste preferences — diet and allergen flags, mood, and cuisine preferences you set during onboarding.',
+        'Taste preferences — diet and allergen flags, and taste sliders you set during onboarding.',
         'Swipe behavior — which dishes you accept, reject, or block, including timestamps, used to build your recommendation model.',
         'Approximate location — only when you allow it, to find nearby restaurants. We do not store precise GPS coordinates.',
         'Device & session data — an authentication token stored in your browser so you stay signed in.',

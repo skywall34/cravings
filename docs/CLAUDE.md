@@ -57,9 +57,9 @@ Multi-user support is live: each user has their own model state (μ, B matrices)
 ### Core Approach
 
 - **Type**: Contextual bandit with Bayesian logistic regression
-- **Feature vector**: 62 dimensions baseline (50 food + 12 context). Optional +8 curated interaction terms via `CRAVINGS_USE_INTERACTIONS=1` (70 dims). Food dims grew 40 → 50 when `cuisine_type` expanded 11 → 21 cuisines (ADR-0007).
+- **Feature vector**: 54 dimensions baseline (50 food + 4 context). Optional +2 curated interaction terms via `CRAVINGS_USE_INTERACTIONS=1` (56 dims). Food dims grew 40 → 50 when `cuisine_type` expanded 11 → 21 cuisines (ADR-0007). Context shrank 12 → 4 when mood + session dietary_mode were dropped (ADR-0013).
 - **Food attributes**: spice_level, sweetness, sourness, savory_umami, saltiness, bitterness, temperature, texture_softness, sauce_heaviness, richness, protein_type (one-hot), cuisine_type (one-hot), carb_base (one-hot), veggie_density, dairy_content, smell_intensity, safety_risk (filter only), nausea_trigger
-- **Context features**: dietary_mode (one-hot, 4: standard/vegetarian/vegan/restricted), time_of_day (sin/cos, 2), mood (one-hot, 4), recent_rejection_rate (scalar), days_since_last_session (scalar)
+- **Context features**: time_of_day (sin/cos, 2), recent_rejection_rate (scalar), days_since_last_session (scalar). *Mood and session dietary_mode were removed (ADR-0013) — diet is now a hard filter from onboarding restrictions, not a soft context signal.*
 - **Update**: Online, after every swipe. Sherman–Morrison rank-1 update for O(d²) posterior updates
 - **Reward signal**: right-swipe = 1.0, left-swipe = `CRAVINGS_LEFT_SWIPE_REWARD` (default 0.3). Left-swipe is a soft negative, not a hard veto.
 - **Exploration**: Thompson Sampling with adaptive α (U-shaped 0.3 → 0.5 → 0.3, with drift detection reset). Swipe-0 α is low (0.3) so a freshly-seeded onboarding prior steers card 1; α opens up at swipe 20 once the onboarding signal is spent.
@@ -126,7 +126,7 @@ The route resolves a `Recommender` via `make_recommender()`; for a registered us
 1. `swipe.build_intake()`: computes `UserFilter` (safety mask + dietary flags), queries eligible items, excludes session seen-set, captures context Snapshot.
 2. `ModelServer.apply_decay()` (in thread): explicit temporal-decay step — persists the model only if decay ran. Then `db.get_swiped_cuisines()` fetches which cuisines the user has swiped on (used for stratified cold-start).
 3. `ModelServer.recommend()` (in thread): pure read — stratified cold-start or Thompson path, embedding similarity boost.
-4. For each candidate, `build_feature_vector(item, context)` assembles 62-dim vector z.
+4. For each candidate, `build_feature_vector(item, context)` assembles 54-dim vector z.
 5. Sample w̃ ~ N(μ, α² B⁻¹) — adds randomness proportional to uncertainty.
 6. Score each candidate: `score = σ(w̃ᵀ z)`. Return top N.
 7. `swipe.shape_results()`: enriches results with metadata, HMAC-seals snapshot → opaque `snapshot_token` (30-min TTL) returned to client.
@@ -164,7 +164,7 @@ The schedule is U-shaped by design (retuned Jun 2026): early α was 1.0, but com
 Computed every request from the user's last 10 swipe events (`recent_rejection_rate`):
 
 - If `recent_rejection_rate ≥ 0.6` → `drift_active = True`, α reset to 0.8
-- Signals that the user's current preferences diverge from what the model learned (e.g. mood shift, different context)
+- Signals that the user's current preferences diverge from what the model learned (e.g. a taste shift, different context)
 - Once rejection rate drops below 0.5, `drift_active` clears and α returns to schedule
 
 `drift_active` is persisted in the `users` table so it survives restarts.
@@ -186,7 +186,7 @@ Effect: old swipes gradually contribute less. After ~14 days, their influence ha
 |---------------|----------------|
 | User only swipes right on spicy food | μ[spice_level] increases; model surfaces spicy dishes in exploitation phase |
 | User rejects everything for 3 sessions | `recent_rejection_rate` > 0.6 → drift detected → exploration resets → model re-learns |
-| User switches to vegetarian mode | `dietary_mode` one-hot changes; context features shift; model updates toward vegetarian-compatible items |
+| User sets a vegetarian restriction in onboarding | `dietary_flags_bitmask` updates; non-vegetarian items are hard-filtered out of the candidate pool before scoring (no soft `dietary_mode` signal — ADR-0013) |
 | User is active for 2 months then returns after a gap | `days_since_last_session` increases as scalar context feature; decay has run during absence, reducing confidence in old preferences |
 | User completes onboarding with strong spice aversion | μ[spice_level] initialized to −2.0; first card and early recs avoid spicy food. Swipes can still correct it, but the prior is sticky (B-growth shrinks each update) — expect several consistent contradicting swipes before it flips |
 | Two users use the same food item | Each sees independent scores — different μ/B means same food can rank #1 for one user and last for another |
@@ -229,10 +229,10 @@ At recommendation time (registered user — `RegisteredRecommender.recommend()`;
 ```
 make_recommender(user, ...) → RegisteredRecommender
 
-swipe.build_intake(conn, sessions, user, dietary_mode, mood, hour, session_id)
+swipe.build_intake(conn, sessions, user, hour, session_id)
   → UserFilter.from_user(user) collapses safety mask + dietary restrictions
   → db.get_eligible_food_items(): filters by safety mask, dietary flags, session seen-set
-  → swipe.capture(): builds Snapshot (dietary_mode, hour, mood, recent_rejection_rate, days_since_last_session)
+  → swipe.capture(): builds Snapshot (hour, recent_rejection_rate, days_since_last_session)
 
 asyncio.to_thread(model_server.apply_decay, user_id)   # explicit decay+persist, no-op unless ≥6h
 db.get_swiped_cuisines(conn, user_id)
@@ -272,8 +272,8 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 
 ### swipe_events
 - `id`, `user_id` (FK), `food_item_id`, `direction` (right/left), `timestamp`
-- Context snapshot: `dietary_mode`, `time_of_day`, `mood`, `recent_rejection_rate`, `days_since_last_session`
-- Fully denormalized context — captures state at time of swipe, not current state. All five context fields written from the verified Snapshot, never recomputed at training time.
+- Context snapshot: `time_of_day`, `recent_rejection_rate`, `days_since_last_session`. (`dietary_mode` + `mood` columns are deprecated tombstones — kept nullable for historical rows, no longer written since ADR-0013.)
+- Fully denormalized context — captures state at time of swipe, not current state. Context fields written from the verified Snapshot, never recomputed at training time.
 
 ### users (additional columns)
 - `recent_likes_json TEXT` — JSON array of last 10 right-swiped item IDs. Used to build embedding centroid for similarity boost.
@@ -316,6 +316,7 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 | P25 | Model accuracy SLAs via Recommender seam: two gated SLAs on the real catalog. Gate 1 (cold start, default suite) — dietary filter correctness + slider-filter composition. Gate 2 (`pytest -m slow`) — swiping convergence ≥ 60% / +10pp lift. Observed: guest 84.0% / +32.5pp, registered 87.7% / +33.8pp (30 runs × 50 swipes, model won 30/30). `tests/test_model_sla.py`. | ✅ Complete |
 | P26 | VLM-gated image ingest + Openverse fallback: images pipeline extended with visual quality gate and Openverse as an additional fallback source. | ✅ Complete |
 | P27 | Tinder-style drag-to-swipe (Jun 2026): `SwipeCard.tsx` — card follows mouse/touch drag with proportional tilt (±20°), NOPE/LIKE overlays fade in during drag (full opacity at 80px), flies off screen past 120px CSS threshold, springs back with cubic-bezier easing below threshold. `touchAction: none` + `{ passive: false }` touchmove listener prevents native scroll stealing on Android/iOS. Keyboard arrow-key swipe removed from `App.tsx` (mobile-first). Hint text `← / → arrow keys · hold ✕ for Never` removed from card bottom. Verified on Android emulator (ADB swipe) and web. | ✅ Complete |
+| P28 | Remove mood + session dietary_mode (Jun 2026, ADR-0013): deleted the swipe-screen `MoodSelector` (mood + dietary_mode pills) — swipe screen is now progress + card + footer. Both dropped from the model: `encode_context` loses the two one-hots (`CONTEXT_DIM 12→4`, `TOTAL_DIM 62→54`), `INTERACTION_TERMS` keeps only `temperature×time`. `Snapshot`/intake/recommend-swipe seam/`/api/recommend` query no longer carry them; `swipe_events.mood`/`dietary_mode` are deprecated nullable tombstones; `mood_breakdown` + `MoodDonut` removed (persona "adventurous vs cozy" axis re-derived from cuisine variety). Diet is now solely the mandatory onboarding restrictions hard-filter. One-time model reset via the existing self-heal dim guard (verified live: `user_id 1 dim=52→54 reset`, 200 OK). Accuracy held: guest 83.0%/+34.7pp, registered 87.3%/+34.1pp (30×50 sweep). Android debug APK rebuilt OK. 334 tests + 2 slow SLAs pass. | ✅ Complete |
 
 ## Next Steps (for next session)
 
@@ -385,7 +386,7 @@ cravings/
 │   │   │   ├── LoginForm.tsx       # Email+password login
 │   │   │   ├── RegisterForm.tsx    # Registration + legal consent line (Terms / Privacy links)
 │   │   │   ├── ProfilePage.tsx     # Visual taste profile: gate card (<15 swipes) or full insights (persona, radar, gauge, affinity, donut, peak-times); password change; data export/delete (GDPR)
-│   │   │   ├── StatsCharts.tsx     # Chart primitives (all SVG, no chart lib): deriveTasteProfile, TastePersonaCard, InsightCard, FlavorRadar, YesRateGauge, CuisineAffinity, MoodDonut, PeakTimesChart
+│   │   │   ├── StatsCharts.tsx     # Chart primitives (all SVG, no chart lib): deriveTasteProfile, TastePersonaCard, InsightCard, FlavorRadar, YesRateGauge, CuisineAffinity, PeakTimesChart
 │   │   │   ├── AllergenNote.tsx    # Inline amber allergen disclaimer (best-effort, not certified)
 │   │   │   ├── ConsentBanner.tsx   # First-load cookie/session consent banner (storage-seam-persisted)
 │   │   │   └── LegalPages.tsx      # Full Privacy Policy + Terms of Service screens
@@ -409,7 +410,7 @@ cravings/
 │   ├── client.py           # Ollama API client, response parsing/validation
 │   └── safety.py           # Safety & dietary bitmask computation; UserFilter dataclass
 ├── model/
-│   ├── features.py         # Feature engineering: one-hot encoding, context vectors (62-dim total)
+│   ├── features.py         # Feature engineering: one-hot encoding, context vectors (54-dim total)
 │   └── thompson.py         # Contextual Thompson Sampling with Bayesian logistic regression
 ├── scripts/
 │   ├── seed_data.py        # ~73 restaurants, ~1000 food items across 21 cuisines
@@ -609,8 +610,10 @@ docker run -p 8080:8080 \
 #
 # Guest-or-auth (optional bearer — guests pass dietary + taste prefs as query/body params):
 #   GET  /api/recommend?session_id=X&dietary_restrictions=vegan&safety_overrides=raw_fish
-#                       &excluded_ids=1&excluded_ids=2&mood=...&dietary_mode=...&top_n=1&hour=...
+#                       &excluded_ids=1&excluded_ids=2&top_n=1&hour=...
 #                       &pref_spice_level=0.8&pref_sweetness=-0.5&pref_sourness=0.0&...
+#                       (mood / dietary_mode query params removed — ADR-0013; legacy clients
+#                        sending them get 200, params silently ignored)
 #     No bearer → guest path: if pref_* params present, seeds/retrieves session-scoped
 #                 ThompsonSamplingModel (stored in SessionStore, evicted after 1h idle);
 #                 scores via asyncio.to_thread(model.score_items). Falls back to global
@@ -642,9 +645,10 @@ docker run -p 8080:8080 \
 #   POST /api/auth/password  {"old_password":"...","new_password":"..."}
 #                    → {success, api_token}  (new token — update localStorage)
 #   GET  /api/profile/stats → {total_swipes, cuisine_breakdown, avg_swipes_to_right,
-#                              mood_breakdown, hour_breakdown, drift_active,
+#                              hour_breakdown, drift_active,
 #                              flavor_profile: {Spicy,Rich,Umami,Fresh,Sweet} (0–100 int each;
 #                                all-zero when user has no right-swipes)}
+#                              (mood_breakdown removed — ADR-0013)
 #   POST /api/onboarding  {"preferences":{"spice_level":0.8,"sweetness":-0.5,...}, "reset": false}
 #                    (registered-only — persists Thompson prior to DB; guests onboard client-side,
 #                     prefs stored in localStorage + sent as pref_* params on /api/recommend)
@@ -674,7 +678,7 @@ docker run -p 8080:8080 \
 
 ## Open Questions (To Resolve During Development)
 
-- ~~How many food-context interaction terms to include~~ — **Resolved (Apr 2026)**: 8 curated terms implemented in `model/features.py:INTERACTION_TERMS` (spice×mood, temp×time, dairy×vegan, etc.). Toggle via `CRAVINGS_USE_INTERACTIONS=1`. **Default OFF** — synthetic-user A/B (30 runs) showed neutral effect (+5.1% off vs +5.4% on, within noise) since synthetic user has flat context preferences. Re-evaluate with real user swipe data.
+- ~~How many food-context interaction terms to include~~ — **Resolved (Apr 2026; revised Jun 2026)**: originally 8 curated terms in `model/features.py:INTERACTION_TERMS`. Default OFF — synthetic-user A/B (30 runs) showed neutral effect. ADR-0013 (Jun 2026) dropped the 6 mood/dietary_mode interaction terms along with the mood + dietary_mode context; **2 `temperature×time` terms remain**. Toggle via `CRAVINGS_USE_INTERACTIONS=1`. Re-evaluate with real user swipe data.
 - ~~Session length (unlimited vs. fixed 10–15 swipes)~~ — **Resolved (May 2026)**: 10 swipes per session, configurable via `CRAVINGS_SESSION_MAX_SWIPES`. `/api/swipe` returns `session_complete: true` on final swipe; frontend shows end-of-session screen.
 - ~~Left-swipe signal weighting (equal to right-swipe, or discounted)~~ — **Resolved (May 2026)**: left-swipe reward = 0.3 (default), configurable via `CRAVINGS_LEFT_SWIPE_REWARD`. Treats left-swipe as "not now" rather than hard veto.
 - LLM tagging quality with gemma4:e2b (monitor and evaluate, upgrade to larger model if needed)

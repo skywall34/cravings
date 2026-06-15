@@ -12,7 +12,7 @@ Cravings is a swipe-based food recommendation app that learns any user's evolvin
 
 This document covers three foundational research workstreams: (1) the food attribute schema that enables the model to generalize from sparse swipe data, (2) the data ingestion pipeline that transforms raw restaurant menu items into structured, model-ready feature vectors, and (3) the Thompson Sampling implementation specification.
 
-The key technical insight: this is not a standard collaborative filtering problem. With a single user whose preferences shift over time, the model must learn over food attributes (flavor, texture, temperature, cuisine) rather than food IDs. Each swipe teaches the model about entire categories of food, not just one dish. Thompson Sampling with contextual features (dietary mode, time of day, mood) provides principled exploration-exploitation tradeoff and natural handling of preference drift via exponential decay weighting.
+The key technical insight: this is not a standard collaborative filtering problem. With a single user whose preferences shift over time, the model must learn over food attributes (flavor, texture, temperature, cuisine) rather than food IDs. Each swipe teaches the model about entire categories of food, not just one dish. Thompson Sampling with contextual features (time of day, recency) provides principled exploration-exploitation tradeoff and natural handling of preference drift via exponential decay weighting.
 
 ---
 
@@ -43,7 +43,7 @@ The schema is organized into four categories: flavor profile, physical propertie
 
 | Attribute | Range | Description & Rationale |
 |-----------|-------|------------------------|
-| temperature | 0.0–1.0 | Serving temperature from cold/frozen (0) through room temp (0.5) to very hot (1). Temperature preference varies by mood and time of day. |
+| temperature | 0.0–1.0 | Serving temperature from cold/frozen (0) through room temp (0.5) to very hot (1). Temperature preference varies by time of day. |
 | texture_softness | 0.0–1.0 | Spectrum from crunchy/crispy (0) to soft/creamy (1). Texture is a major driver of food preferences. |
 | sauce_heaviness | 0.0–1.0 | How saucy/wet the dish is, from dry (0) to heavily sauced (1). Distinguishes a grilled chicken breast from chicken tikka masala. |
 | richness | 0.0–1.0 | Caloric density and fat content perception. From light/clean (0) to heavy/indulgent (1). |
@@ -68,7 +68,7 @@ The schema is organized into four categories: flavor profile, physical propertie
 
 ### 1.3 Total Feature Vector Size
 
-The continuous attributes contribute 14 scalar values. The categorical attributes (protein_type, cuisine_type, carb_base) are one-hot encoded, adding 9 + 21 + 6 = 36 binary dimensions (cuisine_type expanded from 11 → 21 in ADR-0007). The safety_risk flags are binary dimensions used for filtering, not model input. The total food vector is 50 dimensions; context features (dietary_mode, time of day, mood, rejection rate, days-since) add another 12, bringing the working dimensionality to 62 (70 with interaction terms enabled).
+The continuous attributes contribute 14 scalar values. The categorical attributes (protein_type, cuisine_type, carb_base) are one-hot encoded, adding 9 + 21 + 6 = 36 binary dimensions (cuisine_type expanded from 11 → 21 in ADR-0007). The safety_risk flags are binary dimensions used for filtering, not model input. The total food vector is 50 dimensions; context features (time of day, rejection rate, days-since) add another 4, bringing the working dimensionality to 54 (56 with interaction terms enabled). *Context shrank from 12 → 4 when mood + session dietary_mode were dropped in ADR-0013.*
 
 This is within the range where Linear Thompson Sampling can learn effectively from small data.
 
@@ -159,7 +159,7 @@ Name, location, cuisine type, source type (manual/api).
 
 #### swipe_events Table
 
-food_item_id, direction (right/left), timestamp, context snapshot (dietary_mode, time_of_day, mood). Context denormalized — captures state at time of swipe.
+food_item_id, direction (right/left), timestamp, context snapshot (time_of_day). Context denormalized — captures state at time of swipe. (`dietary_mode`/`mood` columns deprecated since ADR-0013 — nullable, no longer written.)
 
 ### 2.5 Pipeline Flow
 
@@ -185,7 +185,7 @@ Go backend queries eligible food items from DB
 
 ### 3.1 Problem Formulation
 
-Contextual bandit. At each timestep t, observe context vector c_t (dietary_mode, time of day, mood) and select food item a_t from candidate pool A_t. User provides feedback r_t (swipe right = 1.0, left = `CRAVINGS_LEFT_SWIPE_REWARD`, default 0.3). Goal: maximize cumulative positive swipes while exploring sufficiently.
+Contextual bandit. At each timestep t, observe context vector c_t (time of day, recency) and select food item a_t from candidate pool A_t. User provides feedback r_t (swipe right = 1.0, left = `CRAVINGS_LEFT_SWIPE_REWARD`, default 0.3). Goal: maximize cumulative positive swipes while exploring sufficiently.
 
 Each food item a is represented by attribute vector x_a. Combined feature vector: z_{a,c} = [x_a; c; x_a ⊗ c_selected], where x_a ⊗ c_selected includes selected interaction terms.
 
@@ -199,7 +199,7 @@ P(r_t = 1 | z_{a,c}) = σ(wᵀ z_{a,c})
 
 #### Algorithm: Per-Swipe Update Cycle
 
-1. Observe context c_t (dietary_mode, time_of_day, mood).
+1. Observe context c_t (time_of_day, recency).
 2. Construct candidate set A_t: all food items not yet seen in current session, passing safety filter.
 3. For each candidate a in A_t, compute feature vector z_{a,c_t}.
 4. Sample weight vector w̃ from posterior: w̃ ~ N(μ_t, α² B_t⁻¹).
@@ -230,11 +230,11 @@ Not a problem for contextual bandits — model predicts based on attribute vecto
 
 | Feature | Encoding | Rationale |
 |---------|----------|-----------|
-| dietary_mode | one-hot (4 dims) | standard, vegetarian, vegan, restricted |
 | time_of_day | cyclical (2 dims) | Sin/cos encoding of hour (0–23) |
-| mood | one-hot (4 dims) | comfort, adventurous, light/healthy, no preference |
 | recent_rejection_rate | scalar (1 dim) | Proportion of left-swipes in last 10 interactions |
 | days_since_last_session | scalar (1 dim) | Time gap since last swiping session |
+
+> **Removed (ADR-0013, Jun 2026):** `mood` (one-hot 4) and session `dietary_mode` (one-hot 4) were dropped from the context vector. Diet is now a mandatory hard filter from onboarding restrictions, not a soft signal; mood was an unused ephemeral context. Context shrank 12 → 4 dims.
 
 ### 3.6 Exploration Control
 
@@ -270,7 +270,7 @@ Adaptive α schedule (U-shaped — retuned Jun 2026 so a fresh onboarding prior 
 - **Email + password registration/login** — bcrypt hashing, `POST /api/auth/register|login|logout|password`.
 - **Guest → registered claim** *(removed by ADR-0005)* — register while holding a guest token attaches credentials to the existing row; swipe history, model state, dietary flags all preserved. Cold register (no bearer) creates a fresh row.
 - **Token rotation** — logout and password change rotate `api_token`; `_get_user` rejects tokens older than `password_changed_at`.
-- **Profile stats** — `GET /api/profile/stats` returns cuisine breakdown, avg swipes to right, mood/time-of-day breakdowns. Derived live from `swipe_events` join `food_items` — no materialized aggregate table.
+- **Profile stats** — `GET /api/profile/stats` returns cuisine breakdown, avg swipes to right, time-of-day breakdown. Derived live from `swipe_events` join `food_items` — no materialized aggregate table. (mood breakdown removed in ADR-0013.)
 - **Frontend** — `AuthMenu` in header (guest: Login/Register; registered: Profile/Logout), `LoginForm`, `RegisterForm`, `ProfilePage` with inline password change. View-state routing in `App.tsx`.
 - **Schema** — `email`, `password_hash`, `password_changed_at`, `token_issued_at` added to `users` via idempotent `_migrate()`.
 - **Tests** — 13 new auth tests; 161 total passing. See ADR-0003 for auth design decisions.

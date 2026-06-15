@@ -38,9 +38,10 @@ consequences fall out of it:
 
 - **No cold-start per dish.** A brand-new menu item is scoreable immediately
   from its attributes — no swipe history on it required.
-- **Context matters.** The same model also reads time of day, mood, and dietary
-  mode, so "comfort food on a cold night" and "something light at noon" pull
-  different recommendations.
+- **Context matters.** The same model also reads time of day and recency, so
+  "something warm at night" and "something light at noon" pull different
+  recommendations. Diet is enforced as a hard filter from your onboarding
+  restrictions.
 - **Taste drifts.** Recent swipes are weighted more heavily than old ones
   (~14-day half-life), so the model follows you instead of locking onto what you
   liked a month ago.

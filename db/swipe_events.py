@@ -8,18 +8,17 @@ def record_swipe(
     user_id: int,
     food_item_id: int,
     direction: str,
-    dietary_mode: str,
     time_of_day: float,
-    mood: str,
     recent_rejection_rate: float,
     days_since_last_session: float,
 ) -> None:
+    # dietary_mode / mood columns are deprecated (no longer written) — left NULL.
     conn.execute(
         "INSERT INTO swipe_events "
-        "(user_id, food_item_id, direction, dietary_mode, time_of_day, mood, "
+        "(user_id, food_item_id, direction, time_of_day, "
         " recent_rejection_rate, days_since_last_session) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        [user_id, food_item_id, direction, dietary_mode, time_of_day, mood,
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [user_id, food_item_id, direction, time_of_day,
          recent_rejection_rate, days_since_last_session],
     )
     conn.commit()
@@ -90,20 +89,6 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
             lefts = 0
     avg_swipes_to_right = round(sum(runs) / len(runs), 1) if runs else None
 
-    # Mood breakdown
-    mood_rows = conn.execute(
-        "SELECT mood, direction, COUNT(*) AS n FROM swipe_events "
-        "WHERE user_id = ? GROUP BY mood, direction",
-        [user_id],
-    ).fetchall()
-    mood_map: dict[str, dict] = {}
-    for r in mood_rows:
-        m = r["mood"] or "no_preference"
-        if m not in mood_map:
-            mood_map[m] = {"mood": m, "right": 0, "left": 0}
-        mood_map[m][r["direction"]] = r["n"]
-    mood_breakdown = list(mood_map.values())
-
     # Hour-of-day breakdown
     hour_rows = conn.execute(
         "SELECT CAST(time_of_day AS INTEGER) AS hour, direction, COUNT(*) AS n "
@@ -149,7 +134,6 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "drift_active": bool(user_row["drift_active"]) if user_row else False,
         "cuisine_breakdown": cuisine_breakdown,
         "avg_swipes_to_right": avg_swipes_to_right,
-        "mood_breakdown": mood_breakdown,
         "hour_breakdown": hour_breakdown,
         "flavor_profile": flavor_profile,
     }
@@ -165,7 +149,7 @@ def delete_impressions_for_user(conn: sqlite3.Connection, user_id: int) -> None:
 
 def get_all_swipes_for_user(conn: sqlite3.Connection, user_id: int) -> list[dict]:
     rows = conn.execute(
-        "SELECT se.direction, se.timestamp, se.mood, se.dietary_mode, "
+        "SELECT se.direction, se.timestamp, "
         "fi.name AS food_name, fi.cuisine_type "
         "FROM swipe_events se "
         "JOIN food_items fi ON fi.id = se.food_item_id "

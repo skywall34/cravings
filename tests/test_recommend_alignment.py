@@ -21,11 +21,9 @@ N_DRAWS = 500
 # Required fraction of draws where the top dish matches the slider.
 ALIGN_THRESHOLD = 0.80
 
-# First-session context: no swipes seen, neutral mood/time.
+# First-session context: no swipes seen, neutral time.
 FIRST_SESSION_CTX = {
-    "dietary_mode": "standard",
     "hour": 12.0,
-    "mood": "no_preference",
     "recent_rejection_rate": 0.0,
     "days_since_last_session": 0.0,
 }

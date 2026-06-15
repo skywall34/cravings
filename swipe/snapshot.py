@@ -13,8 +13,6 @@ from hashlib import sha256
 
 import db.database as db
 
-_DEFAULT_DIETARY_MODE = "standard"
-_DEFAULT_MOOD = "no_preference"
 _TTL_SECONDS = 30 * 60  # 30min — covers human swipe latency, not session duration
 
 _SECRET = os.environ.get("CRAVINGS_SWIPE_SECRET", "").encode() or os.urandom(32)
@@ -27,9 +25,7 @@ class SnapshotError(ValueError):
 @dataclass(frozen=True)
 class Snapshot:
     user_id: int
-    dietary_mode: str
     hour: float
-    mood: str
     recent_rejection_rate: float
     days_since_last_session: float
     issued_at: float
@@ -37,9 +33,7 @@ class Snapshot:
 
     def to_context(self) -> dict:
         return {
-            "dietary_mode": self.dietary_mode,
             "hour": self.hour,
-            "mood": self.mood,
             "recent_rejection_rate": self.recent_rejection_rate,
             "days_since_last_session": self.days_since_last_session,
         }
@@ -53,17 +47,13 @@ def _current_hour() -> float:
 def capture(
     conn: sqlite3.Connection,
     user_id: int,
-    dietary_mode: str | None,
-    mood: str | None,
     hour: float | None = None,
 ) -> Snapshot:
     """Build a Snapshot from current user state. Reads recent rejection rate
     and days-since-last-session from swipe_events."""
     return Snapshot(
         user_id=user_id,
-        dietary_mode=dietary_mode or _DEFAULT_DIETARY_MODE,
         hour=hour if hour is not None else _current_hour(),
-        mood=mood or _DEFAULT_MOOD,
         recent_rejection_rate=db.recent_rejection_rate(conn, user_id),
         days_since_last_session=db.days_since_last_swipe(conn, user_id),
         issued_at=time.time(),
@@ -126,17 +116,13 @@ def verify(token: str, user_id: int) -> Snapshot:
 
 def capture_guest(
     session_id: str,
-    dietary_mode: str | None,
-    mood: str | None,
     hour: float | None = None,
 ) -> Snapshot:
     """Build a Snapshot for a guest. No DB reads — rates default to 0.0."""
     return Snapshot(
         user_id=0,
         session_id=session_id,
-        dietary_mode=dietary_mode or _DEFAULT_DIETARY_MODE,
         hour=hour if hour is not None else _current_hour(),
-        mood=mood or _DEFAULT_MOOD,
         recent_rejection_rate=0.0,
         days_since_last_session=0.0,
         issued_at=time.time(),

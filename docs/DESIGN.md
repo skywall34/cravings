@@ -28,10 +28,9 @@ App loads (returning visit, registered)
   (or: token lost → re-login via AuthMenu → token restored → model + history intact)
 
 [ Swipe Screen ]
-  Mood selector (top of screen, persistent)
-    → comfort | adventurous | light | no preference
-  Dietary mode selector (top of screen, persistent)
-    → standard | vegetarian | vegan | restricted
+  Session progress dots (top) + Swipe Card + footer.
+  (Mood / dietary-mode selectors removed — ADR-0013. Diet is set once via
+   onboarding restrictions; the swipe screen is card-only.)
 
 [ Swipe Card ]
   ← Drag left / ✗ button    → Left-Swipe ("not today")
@@ -71,8 +70,8 @@ Touch-first design: drag the card left or right to swipe. Buttons (✗/✓/Never
 | `components/AuthMenu.tsx` | Header dropdown — guest: Log in/Register; registered: Profile/Logout |
 | `components/LoginForm.tsx` | Email + password login form |
 | `components/RegisterForm.tsx` | Registration form; creates a fresh users row (no guest claim — ADR-0005) |
-| `components/ProfilePage.tsx` | Visual taste-profile page: gate card (< 15 swipes) or full insights (persona hero, flavor radar, say-yes gauge, cuisine affinity, mood donut, peak-times chart); inline password change; data export/delete |
-| `components/StatsCharts.tsx` | Chart primitives used by ProfilePage: `deriveTasteProfile`, `TastePersonaCard`, `InsightCard`, `FlavorRadar`, `YesRateGauge`, `CuisineAffinity`, `MoodDonut`, `PeakTimesChart` |
+| `components/ProfilePage.tsx` | Visual taste-profile page: gate card (< 15 swipes) or full insights (persona hero, flavor radar, say-yes gauge, cuisine affinity, peak-times chart); inline password change; data export/delete |
+| `components/StatsCharts.tsx` | Chart primitives used by ProfilePage: `deriveTasteProfile`, `TastePersonaCard`, `InsightCard`, `FlavorRadar`, `YesRateGauge`, `CuisineAffinity`, `PeakTimesChart` |
 | `hooks/useLocation.ts` | Deferred browser geolocation (requested only on right-swipe) |
 
 **Stack**: React + Vite 5 + TypeScript (strict mode), vanilla browser fetch, zero UI framework dependencies. All API calls proxy through Vite (`/api → localhost:8080`) to the FastAPI backend.
@@ -228,11 +227,9 @@ border-top-color: #E85D04;
 | Register (email exists) | Submit form with taken email | 409 — "log in instead" CTA shown |
 | Log in | AuthMenu → Log in, submit form | Registered user's token written to localStorage; subsequent calls use Thompson path |
 | Log out | AuthMenu → Log out | Token rotated server-side, localStorage token cleared, app returns to guest onboarding |
-| View profile | AuthMenu → Profile & Stats | ProfilePage shown: if < 15 swipes → "keep swiping" gate card; if ≥ 15 → taste persona hero, 3 insight callouts, flavor radar, say-yes gauge, cuisine affinity, mood donut, peak-times chart |
+| View profile | AuthMenu → Profile & Stats | ProfilePage shown: if < 15 swipes → "keep swiping" gate card; if ≥ 15 → taste persona hero, 3 insight callouts, flavor radar, say-yes gauge, cuisine affinity, peak-times chart |
 | Change password | ProfilePage → Change password | Old token invalidated, new token written to localStorage |
-| Onboarding complete | Submit sliders | `POST /api/onboarding`, model warm-started, first card loaded |
-| Mood changed | Selector tap/click | Updates `mood` param on next `GET /api/recommend` |
-| Dietary mode changed | Selector tap/click | Updates `dietary_mode` param on next `GET /api/recommend` |
+| Onboarding complete | Submit sliders + dietary restrictions | `POST /api/onboarding`, model warm-started, first card loaded. Dietary restrictions are the sole diet control (ADR-0013) |
 | Left-swipe ("not today") | ✗ button or drag left past threshold | Model updated (reward=0.3), next card |
 | Hard left-swipe ("never") | Long-press ✗ or "Never" button | Model updated (reward=0.0), next card |
 | Right-swipe | ✓ button or drag right past threshold | Model updated (reward=1.0), location requested, restaurant panel shown |
@@ -268,23 +265,20 @@ Shown on first visit (and on registration before first swipe). Dietary restricti
 └──────────────────────────────┘
 ```
 
-### Mood + Dietary Mode Selectors
-Persistent controls above the swipe card. Compact, tap-friendly on mobile.
-
-- **Mood**: pill buttons — "Comfort" | "Adventurous" | "Light" | "Any" (default)
-- **Dietary mode**: pill buttons — "Standard" | "Vegetarian" | "Vegan" | "Restricted"
-- Active selection: burnt orange fill. Inactive: outline only.
-- Changing either selector takes effect on the very next `GET /api/recommend` call (no reload needed).
-- State lives in `App.tsx` as React state, passed as query params to `getRecommendation()`.
+### Diet handling (no swipe-screen selectors) — ADR-0013
+The mood + dietary-mode pill selectors that used to sit above the swipe card were
+**removed**. They doubled the preferences UX and the dietary-mode pills never
+hard-filtered food. Diet is now set **once** via onboarding dietary restrictions
+(a mandatory hard filter applied before scoring); mood is gone entirely. The swipe
+screen is just session-progress dots + the swipe card + footer.
 
 ```
 ┌──────────────────────────────┐
-│  Mood:  [Comfort] Adventurous  Light  Any  │
-│  Diet:  [Standard] Vegetarian  Vegan  ...  │
-│                              │
+│        • • • ◦ ◦ ◦ ◦          │  ← session progress dots
 │  ┌────────────────────────┐  │
 │  │     [Swipe Card]       │  │
 │  └────────────────────────┘  │
+│        Privacy · Terms       │  ← footer
 └──────────────────────────────┘
 ```
 

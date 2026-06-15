@@ -51,9 +51,7 @@ async def record_swipe(
         user["id"],
         item["id"],
         direction,
-        snapshot.dietary_mode,
         snapshot.hour,
-        snapshot.mood,
         snapshot.recent_rejection_rate,
         snapshot.days_since_last_session,
     )

@@ -6,7 +6,7 @@ import type { FoodItem, SwipeResult, GuestPrefs, UserInfo, SwipeDirection } from
 // --- test doubles ----------------------------------------------------------
 
 interface RecommendCall {
-  sessionId: string; mood: string; dietary: string; topN: number; guestPrefs?: GuestPrefs
+  sessionId: string; topN: number; guestPrefs?: GuestPrefs
 }
 interface SwipeCall {
   foodItemId: string; direction: SwipeDirection; sessionId: string
@@ -19,8 +19,8 @@ class FakeTransport implements RecommenderTransport {
   pool: FoodItem[] = []
   swipeResult: SwipeResult = { success: true, total_swipes: 0, session_complete: false }
 
-  recommend(sessionId: string, mood: string, dietary: string, topN: number, guestPrefs?: GuestPrefs) {
-    this.recommendCalls.push({ sessionId, mood, dietary, topN, guestPrefs })
+  recommend(sessionId: string, topN: number, guestPrefs?: GuestPrefs) {
+    this.recommendCalls.push({ sessionId, topN, guestPrefs })
     return Promise.resolve(this.pool)
   }
   swipe(foodItemId: string, direction: SwipeDirection, sessionId: string, snapshotToken: string, guestPrefs?: GuestPrefs) {
@@ -43,7 +43,6 @@ const GUEST_DIETARY: GuestPrefs = {
 const REGISTERED: UserInfo = {
   id: 7, name: 'reg', email: 'a@b.c', is_registered: true, onboarding_complete: true,
 }
-const CTX = { mood: 'comfort', dietary: 'standard' }
 
 // --- factory (twin of make_recommender) ------------------------------------
 
@@ -53,7 +52,7 @@ describe('makeRecommender — identity resolved once', () => {
 
   it('null user → Guest: sends dietary + taste prefs', async () => {
     const rec = makeRecommender(null, GUEST_DIETARY, t)
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[0].guestPrefs).toMatchObject({
       dietaryRestrictions: ['vegan'], tastePrefs: { spice_level: 0.8 },
     })
@@ -61,7 +60,7 @@ describe('makeRecommender — identity resolved once', () => {
 
   it('registered user → omits guest prefs (server owns them)', async () => {
     const rec = makeRecommender(REGISTERED, GUEST_DIETARY, t)
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[0].guestPrefs).toBeUndefined()
   })
 })
@@ -74,15 +73,15 @@ describe('GuestRecommender — client-side seen-set', () => {
 
   it('threads accumulated excludedIds across next() calls', async () => {
     const rec = makeRecommender(null, GUEST_DIETARY, t)
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[0].guestPrefs?.excludedIds).toEqual([])
 
     await rec.swipe(food(1), 'left')
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[1].guestPrefs?.excludedIds).toEqual([1])
 
     await rec.swipe(food(2), 'right')
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[2].guestPrefs?.excludedIds).toEqual([1, 2])
   })
 
@@ -90,7 +89,7 @@ describe('GuestRecommender — client-side seen-set', () => {
     const rec = makeRecommender(null, GUEST_DIETARY, t)
     // swipe item 5, then the immediate next() (e.g. after a left-swipe) must exclude it
     await rec.swipe(food(5), 'left')
-    await rec.next(CTX)
+    await rec.next()
     expect(t.recommendCalls[0].guestPrefs?.excludedIds).toContain(5)
   })
 
@@ -166,7 +165,7 @@ describe('reset() + getState()', () => {
     expect(after.sessionId).not.toBe(before)
 
     // seen-set wiped: next() excludes nothing
-    await rec.next(CTX)
+    await rec.next()
     const lastCall = t.recommendCalls[t.recommendCalls.length - 1]
     expect(lastCall.guestPrefs?.excludedIds).toEqual([])
   })

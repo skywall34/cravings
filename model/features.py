@@ -8,7 +8,7 @@ import numpy as np
 
 # Toggle interaction terms via env var. Off by default — synthetic-user A/B
 # (Apr 2026) showed interactions HURT when user has no context-dependent prefs.
-# Enable for users whose mood/time preferences clearly differ.
+# Enable for users whose time-of-day preferences clearly differ.
 USE_INTERACTIONS = os.environ.get("CRAVINGS_USE_INTERACTIONS", "0") == "1"
 
 # Categorical value mappings (order matters — defines one-hot positions)
@@ -21,8 +21,6 @@ CUISINE_TYPES = [
     "other",
 ]
 CARB_BASES = ["rice", "noodles_pasta", "bread", "potato", "tortilla", "none"]
-DIETARY_MODES = ["standard", "vegetarian", "vegan", "restricted"]
-MOODS = ["comfort", "adventurous", "light_healthy", "no_preference"]
 
 # Continuous food attribute columns (in order)
 CONTINUOUS_ATTRS = [
@@ -33,23 +31,17 @@ CONTINUOUS_ATTRS = [
 
 # Curated food×context interaction terms.
 # Each entry: (food_attr, context_kind, context_key) — multiplied at encode time.
-# context_kind ∈ {"mood", "dietary_mode", "time_sin", "time_cos"}.
-# Chosen for high-signal pairs (spice/comfort, dairy/vegan, etc.); avoids 143-dim full cross.
+# context_kind ∈ {"time_sin", "time_cos"}.
+# Chosen for high-signal pairs (warm food at night, etc.); avoids full cross.
 INTERACTION_TERMS = [
-    ("spice_level", "mood", "comfort"),
-    ("spice_level", "mood", "adventurous"),
     ("temperature", "time_sin", None),
     ("temperature", "time_cos", None),
-    ("dairy_content", "dietary_mode", "vegan"),
-    ("sweetness", "mood", "light_healthy"),
-    ("richness", "mood", "comfort"),
-    ("veggie_density", "mood", "light_healthy"),
 ]
 
 # Dimensions: 14 continuous + 9 protein + 21 cuisine + 6 carb = 50 food dims
 FOOD_DIM = len(CONTINUOUS_ATTRS) + len(PROTEIN_TYPES) + len(CUISINE_TYPES) + len(CARB_BASES)
-# Context: 4 dietary_mode + 2 time_of_day + 4 mood + 1 rejection_rate + 1 days_since = 12
-CONTEXT_DIM = len(DIETARY_MODES) + 2 + len(MOODS) + 2
+# Context: 2 time_of_day + 1 rejection_rate + 1 days_since = 4
+CONTEXT_DIM = 2 + 2
 INTERACTION_DIM = len(INTERACTION_TERMS) if USE_INTERACTIONS else 0
 # Total
 TOTAL_DIM = FOOD_DIM + CONTEXT_DIM + INTERACTION_DIM
@@ -78,7 +70,7 @@ class FeatureSchema:
 
     @property
     def context_dim(self) -> int:
-        return len(DIETARY_MODES) + 2 + len(MOODS) + 2
+        return 2 + 2
 
     @property
     def interaction_dim(self) -> int:
@@ -103,22 +95,16 @@ def encode_food_item(item: dict) -> np.ndarray:
 
 
 def encode_context(
-    dietary_mode: str = "standard",
     hour: float = 12.0,
-    mood: str = "no_preference",
     recent_rejection_rate: float = 0.0,
     days_since_last_session: float = 0.0,
 ) -> np.ndarray:
     """Encode context features into vector."""
-    diet = one_hot(dietary_mode, DIETARY_MODES)
     # Cyclical time encoding
     time_sin = math.sin(2 * math.pi * hour / 24.0)
     time_cos = math.cos(2 * math.pi * hour / 24.0)
-    mood_vec = one_hot(mood, MOODS)
     return np.concatenate([
-        diet,
         [time_sin, time_cos],
-        mood_vec,
         [recent_rejection_rate, days_since_last_session],
     ])
 
@@ -128,17 +114,11 @@ def encode_interactions(item: dict, context: dict) -> np.ndarray:
     hour = float(context.get("hour", 12.0))
     time_sin = math.sin(2 * math.pi * hour / 24.0)
     time_cos = math.cos(2 * math.pi * hour / 24.0)
-    mood = context.get("mood", "no_preference")
-    dietary_mode = context.get("dietary_mode", "standard")
 
     out = np.zeros(len(INTERACTION_TERMS))
     for i, (attr, kind, key) in enumerate(INTERACTION_TERMS):
         food_val = float(item.get(attr, 0.0) or 0.0)
-        if kind == "mood":
-            ctx_val = 1.0 if mood == key else 0.0
-        elif kind == "dietary_mode":
-            ctx_val = 1.0 if dietary_mode == key else 0.0
-        elif kind == "time_sin":
+        if kind == "time_sin":
             ctx_val = time_sin
         elif kind == "time_cos":
             ctx_val = time_cos

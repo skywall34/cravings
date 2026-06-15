@@ -5,7 +5,7 @@ import type { UserInfo, SwipeStats } from '../api'
 import {
   deriveTasteProfile,
   TastePersonaCard, InsightCard, FlavorRadar,
-  YesRateGauge, CuisineAffinity, MoodDonut, PeakTimesChart,
+  YesRateGauge, CuisineAffinity, PeakTimesChart,
 } from './StatsCharts'
 
 const MIN_SWIPES_FOR_PROFILE = 15
@@ -171,14 +171,6 @@ function StatsSection({ stats }: { stats: SwipeStats }) {
       {stats.cuisine_breakdown.length > 0 && (
         <Section title="Cuisine Affinity" subtitle="Ranked by acceptance rate">
           <CuisineAffinity items={stats.cuisine_breakdown} />
-        </Section>
-      )}
-
-      {stats.mood_breakdown.length > 0 && (
-        <Section title="Mood Mix" subtitle="How you swipe by mood">
-          <div style={{ padding: '16px' }}>
-            <MoodDonut items={stats.mood_breakdown} />
-          </div>
         </Section>
       )}
 

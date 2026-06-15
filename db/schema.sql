@@ -108,9 +108,9 @@ CREATE TABLE IF NOT EXISTS swipe_events (
     timestamp TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     -- Context snapshot (denormalized — state at time of swipe)
-    dietary_mode TEXT,       -- standard | vegetarian | vegan | restricted
+    dietary_mode TEXT,       -- deprecated, no longer written (NULL for new rows)
     time_of_day REAL,        -- hour as decimal (0.0-23.99)
-    mood TEXT,               -- comfort | adventurous | light_healthy | no_preference
+    mood TEXT,               -- deprecated, no longer written (NULL for new rows)
     recent_rejection_rate REAL NOT NULL DEFAULT 0.0,
     days_since_last_session REAL NOT NULL DEFAULT 0.0
 );

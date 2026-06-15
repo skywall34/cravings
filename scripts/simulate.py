@@ -51,9 +51,7 @@ def create_synthetic_user(seed: int = 42, profile: str = "picky") -> dict:
         "bias": bias,
         "noise": 0.1,
         "context": {
-            "dietary_mode": "standard",
             "hour": 19.0,
-            "mood": "adventurous",
             "recent_rejection_rate": 0.0,
             "days_since_last_session": 0.0,
         },

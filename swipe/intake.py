@@ -14,8 +14,6 @@ async def build_intake(
     conn: sqlite3.Connection,
     sessions: SessionStore,
     user: dict,
-    dietary_mode: str,
-    mood: str,
     hour: float | None,
     session_id: str,
 ) -> tuple[Snapshot, list[dict]]:
@@ -23,7 +21,7 @@ async def build_intake(
 
     Returns (snapshot, candidates). Raises nothing — callers check empty candidates.
     """
-    snapshot = capture(conn, user["id"], dietary_mode, mood, hour)
+    snapshot = capture(conn, user["id"], hour)
     filt = UserFilter.from_user(user)
     excluded = await sessions.seen(session_id)
     candidates = db.get_eligible_food_items(conn, filt.safety_mask, filt.dietary_restrictions, excluded)
@@ -36,8 +34,6 @@ async def build_guest_intake(
     session_id: str,
     dietary_restrictions: list[str],
     safety_overrides: list[str],
-    dietary_mode: str,
-    mood: str,
     hour: float | None,
     top_n: int,
     extra_excluded: list[int] | None = None,
@@ -52,7 +48,7 @@ async def build_guest_intake(
     )
     import random
     random.shuffle(candidates)
-    snap = capture_guest(session_id, dietary_mode, mood, hour)
+    snap = capture_guest(session_id, hour)
     return snap, candidates
 
 

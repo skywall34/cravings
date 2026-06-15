@@ -7,8 +7,6 @@ import type { FoodItem, SwipeDirection, SwipeResult, GuestPrefs } from '../api'
 export interface RecommenderTransport {
   recommend(
     sessionId: string,
-    mood: string,
-    dietary: string,
     topN: number,
     guestPrefs?: GuestPrefs,
   ): Promise<FoodItem[]>

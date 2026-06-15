@@ -11,9 +11,6 @@ import type { SwipeCardHandle } from './components/SwipeCard'
 import { RestaurantPanel } from './components/RestaurantPanel'
 import { OnboardingScreen } from './components/OnboardingScreen'
 import { SessionSummary } from './components/SessionSummary'
-import { MoodSelector } from './components/MoodSelector'
-import type { MoodOption, DietOption } from './components/MoodSelector'
-import { moodToApi, dietToApi } from './components/MoodSelector'
 import { AuthMenu } from './components/AuthMenu'
 import { LoginForm } from './components/LoginForm'
 import { RegisterForm } from './components/RegisterForm'
@@ -98,8 +95,6 @@ export default function App() {
   const [selectedFood, setSelectedFood] = useState<FoodItem | null>(null)
   const [swiping, setSwiping] = useState(false)
   const [cardKey, setCardKey] = useState(0)
-  const [mood, setMood] = useState<MoodOption>('Any')
-  const [dietary, setDietary] = useState<DietOption>('Standard')
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
 
@@ -163,7 +158,7 @@ export default function App() {
     setLoading(true)
     setError(null)
     try {
-      const next = await rec.next({ mood: moodToApi(mood), dietary: dietToApi(dietary) })
+      const next = await rec.next()
       if (!next) {
         setFood(null)
         setError('No more items available.')
@@ -190,14 +185,14 @@ export default function App() {
     rec.reset()
     setScreen('swipe')
     await loadNextCard()
-  }, [mood, dietary, currentUser, rec])
+  }, [currentUser, rec])
 
   const handleOnboardingSkip = useCallback(async (dietary: GuestPrefs) => {
     await saveDietaryToStorage(dietary)
     setGuestDietary(dietary)
     setScreen('swipe')
     await loadNextCard()
-  }, [mood, dietary])
+  }, [])
 
   async function handleNewSession() {
     rec.reset()
@@ -248,7 +243,7 @@ export default function App() {
     } finally {
       setSwiping(false)
     }
-  }, [food, swiping, rec, requestLocation, gate, mood, dietary])
+  }, [food, swiping, rec, requestLocation, gate])
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -349,10 +344,6 @@ export default function App() {
       {screen !== 'login' && screen !== 'register' && screen !== 'profile' && screen === 'swipe' && (
         <>
           <SessionProgress count={swipeCount} total={SESSION_MAX} />
-          <MoodSelector
-            mood={mood} dietary={dietary}
-            onMoodChange={setMood} onDietaryChange={setDietary}
-          />
           {error && <p className="error-msg">{error}</p>}
           <div className="card-wrap">
             <div key={cardKey} className="card-enter">

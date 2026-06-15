@@ -56,8 +56,7 @@ def _guest_recommend_ids(conn, sessions, session_id, *, dietary, taste, top_n=5)
         safety_overrides=[], taste_prefs=dict(taste),
     )
     results = asyncio.run(
-        rec.recommend(mood="no_preference", dietary_mode="standard", hour=12.0,
-                      top_n=top_n, excluded_ids=[])
+        rec.recommend(hour=12.0, top_n=top_n, excluded_ids=[])
     )
     items = [db.get_food_item(conn, r["id"]) for r in results]
     return (items[0] if items else None), items
@@ -104,7 +103,7 @@ def test_cold_start_spicy_slider_under_vegetarian_filter():
             # Re-draw the same vegetarian pool to get its spice baseline.
             _, cands = asyncio.run(build_guest_intake(
                 conn, sessions, f"{sid}_pool", ["vegetarian"], [],
-                "standard", "no_preference", 12.0, top_n=1, extra_excluded=None,
+                12.0, top_n=1, extra_excluded=None,
             ))
             if top1 is None or not cands:
                 continue

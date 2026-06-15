@@ -241,8 +241,6 @@ async def onboarding(body: OnboardingBody, user=Depends(_get_user), conn=Depends
 @app.get("/api/recommend")
 async def recommend(
     request: Request,
-    mood: str = Query(default="no_preference"),
-    dietary_mode: str = Query(default="standard"),
     top_n: int = Query(default=1, ge=1),
     session_id: str = Query(default=""),
     hour: float | None = Query(default=None),
@@ -268,7 +266,7 @@ async def recommend(
         taste_prefs=taste_prefs,
     )
     results = await rec.recommend(
-        mood=mood, dietary_mode=dietary_mode, hour=hour, top_n=top_n, excluded_ids=excluded_ids,
+        hour=hour, top_n=top_n, excluded_ids=excluded_ids,
     )
     if not results:
         raise HTTPException(status_code=404, detail="no eligible food items")

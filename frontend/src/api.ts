@@ -149,7 +149,6 @@ export interface SwipeStats {
   drift_active: boolean
   cuisine_breakdown: { cuisine: string; right: number; left: number }[]
   avg_swipes_to_right: number | null
-  mood_breakdown: { mood: string; right: number; left: number }[]
   hour_breakdown: { hour: number; right: number; left: number }[]
   flavor_profile: Record<string, number>
 }
@@ -232,15 +231,11 @@ export async function postOnboarding(prefs: Record<string, number>, reset = fals
 
 export async function getRecommendation(
   sessionId: string,
-  mood = 'no_preference',
-  dietaryMode = 'standard',
   topN = 1,
   guestPrefs?: GuestPrefs,
 ): Promise<FoodItem[]> {
   const params = new URLSearchParams({
     session_id: sessionId,
-    mood,
-    dietary_mode: dietaryMode,
     top_n: String(topN),
   })
   if (guestPrefs) {

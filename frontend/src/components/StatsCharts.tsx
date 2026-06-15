@@ -14,10 +14,6 @@ export const CUISINE_EMOJI: Record<string, string> = {
   chinese: '🥡', american: '🍔', french: '🥐', greek: '🫒',
 }
 
-export const MOOD_EMOJI: Record<string, string> = {
-  comfort: '🛋️', adventurous: '🧭', light: '🥗', no_preference: '🎲',
-}
-
 // helpers
 export function pct(right: number, left: number): number {
   const t = right + left
@@ -63,7 +59,6 @@ export interface TasteProfile {
   topCuisine: { cuisine: string; right: number; left: number }
   sureThing: { cuisine: string; right: number; left: number }
   topFlavor: [string, number]
-  topMood: { mood: string; right: number; left: number } | undefined
   peakHour: { hour: number; right: number; left: number } | undefined
   insights: { icon: string; title: string; text: string }[]
 }
@@ -82,15 +77,13 @@ export function deriveTasteProfile(stats: SwipeStats): TasteProfile {
   const flavors = Object.entries(stats.flavor_profile).sort((a, b) => b[1] - a[1])
   const topFlavor: [string, number] = flavors[0] ? [flavors[0][0], flavors[0][1]] : ['Spicy', 0]
 
-  const moods = stats.mood_breakdown.filter(m => m.mood !== 'no_preference')
-  const topMood = [...moods].sort((a, b) => pct(b.right, b.left) - pct(a.right, a.left))[0]
-
   const peakHour = [...stats.hour_breakdown].sort((a, b) => b.right - a.right)[0]
 
-  const adventurous = stats.mood_breakdown.find(m => m.mood === 'adventurous') ?? { right: 0, left: 1 }
-  const comfort = stats.mood_breakdown.find(m => m.mood === 'comfort') ?? { right: 0, left: 1 }
-  const adv = pct(adventurous.right, adventurous.left)
-  const com = pct(comfort.right, comfort.left)
+  // Adventurous vs cozy axis derived from cuisine variety (how broadly the user
+  // says yes across cuisines) now that explicit mood is gone.
+  const likedCuisines = cuisines.filter(c => c.right > 0).length
+  const triedCuisines = cuisines.filter(c => c.right + c.left > 0).length || 1
+  const variety = likedCuisines / triedCuisines
 
   const flavorWord: Record<string, string> = {
     Spicy: 'Heat-Seeker', Rich: 'Comfort Gourmand', Fresh: 'Clean-Eater',
@@ -98,12 +91,12 @@ export function deriveTasteProfile(stats: SwipeStats): TasteProfile {
   }
   const word = flavorWord[topFlavor[0]] ?? 'Explorer'
   let persona: string, personaDesc: string
-  if (adv > com + 0.08) {
+  if (variety > 0.6) {
     persona = `The Adventurous ${word}`
-    personaDesc = `You chase bold, new flavors — and lean ${topFlavor[0].toLowerCase()}. Comfort food is a sometimes thing.`
-  } else if (com > adv + 0.08) {
+    personaDesc = `You say yes across a wide range of cuisines — and lean ${topFlavor[0].toLowerCase()}. Comfort food is a sometimes thing.`
+  } else if (variety < 0.35) {
     persona = `The Cozy ${word}`
-    personaDesc = `Comfort is your compass. You know what you love — usually something ${topFlavor[0].toLowerCase()} — and you order it with confidence.`
+    personaDesc = `You know what you love — usually something ${topFlavor[0].toLowerCase()} — and you order it with confidence.`
   } else {
     persona = `The Balanced ${word}`
     personaDesc = `You mix the familiar with the new, with a clear pull toward ${topFlavor[0].toLowerCase()} flavors.`
@@ -128,7 +121,7 @@ export function deriveTasteProfile(stats: SwipeStats): TasteProfile {
     },
   ]
 
-  return { persona, personaDesc, overallYes, topCuisine, sureThing, topFlavor, topMood, peakHour, insights }
+  return { persona, personaDesc, overallYes, topCuisine, sureThing, topFlavor, peakHour, insights }
 }
 
 // ── Taste persona hero ───────────────────────────────────────────────
@@ -302,45 +295,6 @@ export function CuisineAffinity({ items }: { items: { cuisine: string; right: nu
           </div>
         )
       })}
-    </div>
-  )
-}
-
-// ── Mood donut ───────────────────────────────────────────────────────
-export function MoodDonut({ items }: { items: { mood: string; right: number; left: number }[] }) {
-  const palette = [ACCENT, shift(ACCENT, 40), shift(ACCENT, -30), '#D9C4B0']
-  const totals = items.map(m => m.right + m.left)
-  const grand = totals.reduce((a, b) => a + b, 0) || 1
-  const size = 130, r = 52, c = 2 * Math.PI * r
-  let offset = 0
-  const segs = items.map((m, i) => {
-    const frac = totals[i] / grand
-    const seg = { dash: frac * c, gap: c - frac * c, offset, color: palette[i % palette.length], label: m.mood, frac }
-    offset -= frac * c
-    return seg
-  })
-  return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap' }}>
-      <svg viewBox={`0 0 ${size} ${size}`} width="118" height="118" style={{ flexShrink: 0 }}>
-        {segs.map((s, i) => (
-          <circle key={i} cx={size / 2} cy={size / 2} r={r} fill="none" stroke={s.color} strokeWidth="16"
-            strokeDasharray={`${s.dash} ${s.gap}`} strokeDashoffset={s.offset}
-            transform={`rotate(-90 ${size / 2} ${size / 2})`} />
-        ))}
-        <text x={size / 2} y={size / 2 - 3} textAnchor="middle" fontSize="20" fontWeight="900" fill={TEXT_PRIMARY} style={{ fontFamily: 'inherit' }}>{grand}</text>
-        <text x={size / 2} y={size / 2 + 14} textAnchor="middle" fontSize="9" fontWeight="700" fill={TEXT_SUB} style={{ fontFamily: 'inherit' }}>SWIPES</text>
-      </svg>
-      <div style={{ flex: 1, minWidth: 130 }}>
-        {segs.map((s, i) => (
-          <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 9, marginBottom: i === segs.length - 1 ? 0 : 9 }}>
-            <span style={{ width: 11, height: 11, borderRadius: 3, background: s.color, flexShrink: 0 }} />
-            <span style={{ fontSize: '0.84rem', fontWeight: 700, color: TEXT_PRIMARY, textTransform: 'capitalize', flex: 1 }}>
-              {MOOD_EMOJI[s.label] ?? ''} {cap(s.label)}
-            </span>
-            <span style={{ fontSize: '0.8rem', fontWeight: 700, color: TEXT_SUB }}>{Math.round(s.frac * 100)}%</span>
-          </div>
-        ))}
-      </div>
     </div>
   )
 }

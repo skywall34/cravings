@@ -77,7 +77,7 @@ class TestModelServer:
             make_item_dict(id=1, name="Curry"),
             make_item_dict(id=2, name="Salad", spice_level=0.0),
         ]
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         results = service.recommend(uid, candidates, ctx, top_n=2)
         assert len(results) == 2
         assert results[0]["rank"] == 1
@@ -88,14 +88,14 @@ class TestModelServer:
     def test_recommend_respects_top_n(self, service, db_with_user):
         _, uid = db_with_user
         candidates = [make_item_dict(id=i) for i in range(5)]
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         results = service.recommend(uid, candidates, ctx, top_n=1)
         assert len(results) == 1
 
     def test_record_swipe_increments_total(self, service, db_with_user):
         _, uid = db_with_user
         item = make_item_dict()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         total = service.record_swipe(uid, item, ctx, reward=1)
         assert total == 1
         total = service.record_swipe(uid, item, ctx, reward=0)
@@ -111,7 +111,7 @@ class TestModelServer:
     def test_swipe_then_status(self, service, db_with_user):
         _, uid = db_with_user
         item = make_item_dict()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         for _ in range(3):
             service.record_swipe(uid, item, ctx, reward=1)
         status = service.get_status(uid)
@@ -121,7 +121,7 @@ class TestModelServer:
         db_path, uid = db_with_user
         svc1 = ModelServer(UserModelStore(db_path))
         item = make_item_dict()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         svc1.record_swipe(uid, item, ctx, reward=1)
         svc2 = ModelServer(UserModelStore(db_path))
         status = svc2.get_status(uid)
@@ -155,7 +155,7 @@ class TestModelServer:
 
         # Scoring must work after the heal (this is what used to crash).
         svc = ModelServer(store)
-        scored = svc.recommend(uid, [make_item_dict()], {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"})
+        scored = svc.recommend(uid, [make_item_dict()], {"hour": 12.0})
         assert len(scored) == 1
 
 
@@ -170,7 +170,7 @@ class TestModelServerIsolation:
 
         svc = ModelServer(UserModelStore(db_path))
         item = make_item_dict()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
 
         for _ in range(3):
             svc.record_swipe(uid1, item, ctx, reward=1)
@@ -199,7 +199,7 @@ class TestStratifiedColdStart:
 
     def test_cold_start_returns_distinct_cuisines(self, setup):
         _, uid, items, svc = setup
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         results = svc.recommend(uid, items, ctx, top_n=3)
         assert len(results) == 3
         cuisines = [next(it["cuisine_type"] for it in items if it["id"] == r["id"]) for r in results]
@@ -211,7 +211,7 @@ class TestStratifiedColdStart:
         conn = get_connection(db_path)
         fusion_item = _insert_item_with_cuisine(conn, 99, "other")
         conn.close()
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         results = svc.recommend(uid, items + [fusion_item], ctx, top_n=3)
         result_ids = {r["id"] for r in results}
         assert 99 not in result_ids, "other-cuisine item must not appear in stratified phase"
@@ -221,11 +221,11 @@ class TestStratifiedColdStart:
         conn = get_connection(db_path)
         # Record one swipe per cuisine to mark all cuisines as seen
         for item in items:
-            db_record_swipe(conn, uid, item["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+            db_record_swipe(conn, uid, item["id"], "right", 12.0, 0.0, 0.0)
         swiped = get_swiped_cuisines(conn, uid)
         conn.close()
 
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         # Should now use normal Thompson path (all cuisines covered → unseen_cuisines empty)
         results = svc.recommend(uid, items, ctx, top_n=1, swiped_cuisines=swiped)
         assert len(results) == 1
@@ -234,11 +234,11 @@ class TestStratifiedColdStart:
         db_path, uid, items, svc = setup
         conn = get_connection(db_path)
         # Swipe on the first item (american)
-        db_record_swipe(conn, uid, items[0]["id"], "right", "standard", 12.0, "no_preference", 0.0, 0.0)
+        db_record_swipe(conn, uid, items[0]["id"], "right", 12.0, 0.0, 0.0)
         swiped = get_swiped_cuisines(conn, uid)
         conn.close()
 
-        ctx = {"dietary_mode": "standard", "hour": 12.0, "mood": "no_preference"}
+        ctx = {"hour": 12.0}
         results = svc.recommend(uid, items, ctx, top_n=3, swiped_cuisines=swiped)
         result_item_ids = {r["id"] for r in results}
         # american item should not appear (already swiped, american = covered)

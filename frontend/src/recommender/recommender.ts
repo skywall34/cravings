@@ -13,12 +13,6 @@ export interface SwipeEntry {
   direction: SwipeDirection
 }
 
-// Live MoodSelector state, already mapped to API strings by the caller.
-export interface RecommendContext {
-  mood: string
-  dietary: string
-}
-
 export interface SwipeOutcome {
   result: SwipeResult
   // server flag OR local count >= SESSION_MAX (see ADR: local count is a fallback)
@@ -34,7 +28,7 @@ export interface RecommenderState {
 }
 
 export interface Recommender {
-  next(ctx: RecommendContext): Promise<FoodItem | null>
+  next(): Promise<FoodItem | null>
   swipe(food: FoodItem, direction: SwipeDirection): Promise<SwipeOutcome>
   reset(): void
   // Arrow-typed (not methods) so they carry a stable, pre-bound reference for
@@ -93,7 +87,7 @@ abstract class BaseRecommender implements Recommender {
 
   protected onReset(): void {}
 
-  abstract next(ctx: RecommendContext): Promise<FoodItem | null>
+  abstract next(): Promise<FoodItem | null>
   abstract swipe(food: FoodItem, direction: SwipeDirection): Promise<SwipeOutcome>
 }
 
@@ -114,9 +108,9 @@ class GuestRecommender extends BaseRecommender {
     this.seenIds = []
   }
 
-  async next(ctx: RecommendContext): Promise<FoodItem | null> {
+  async next(): Promise<FoodItem | null> {
     const prefs: GuestPrefs = { ...this.guestDietary, excludedIds: this.seenIds }
-    const recs = await this.transport.recommend(this.sessionId, ctx.mood, ctx.dietary, 1, prefs)
+    const recs = await this.transport.recommend(this.sessionId, 1, prefs)
     return recs[0] ?? null
   }
 
@@ -138,8 +132,8 @@ class RegisteredRecommender extends BaseRecommender {
     super()
   }
 
-  async next(ctx: RecommendContext): Promise<FoodItem | null> {
-    const recs = await this.transport.recommend(this.sessionId, ctx.mood, ctx.dietary, 1, undefined)
+  async next(): Promise<FoodItem | null> {
+    const recs = await this.transport.recommend(this.sessionId, 1, undefined)
     return recs[0] ?? null
   }
 

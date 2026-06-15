@@ -41,9 +41,7 @@ def sample_item():
 @pytest.fixture
 def sample_context():
     return {
-        "dietary_mode": "standard",
         "hour": 19.0,
-        "mood": "comfort",
         "recent_rejection_rate": 0.0,
         "days_since_last_session": 0.0,
     }

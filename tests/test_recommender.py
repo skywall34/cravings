@@ -25,7 +25,7 @@ class _SpyModel:
 
 
 def _guest_token(session_id: str) -> str:
-    return seal(capture_guest(session_id, "standard", "no_preference", None))
+    return seal(capture_guest(session_id, None))
 
 
 def _guest(sessions: SessionStore, session_id: str) -> GuestRecommender:

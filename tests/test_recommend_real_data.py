@@ -57,7 +57,7 @@ def _draw_pool(conn, sessions, session_id, top_n=1):
         build_guest_intake(
             conn, sessions, session_id,
             dietary_restrictions=[], safety_overrides=[],
-            dietary_mode="standard", mood="no_preference", hour=12.0,
+            hour=12.0,
             top_n=top_n, extra_excluded=None,
         )
     )

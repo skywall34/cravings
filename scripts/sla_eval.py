@@ -112,8 +112,7 @@ async def guest_trajectory(
     for _ in range(n_swipes):
         if policy == "model":
             results = await rec.recommend(
-                mood="no_preference", dietary_mode="standard", hour=12.0,
-                top_n=1, excluded_ids=[],
+                hour=12.0, top_n=1, excluded_ids=[],
             )
             if not results:
                 break
@@ -125,7 +124,7 @@ async def guest_trajectory(
         else:  # random control: same dietary-filtered pool, uniform pick, no learning
             _, cands = await build_guest_intake(
                 conn, sessions, sid, list(dietary_restrictions), [],
-                "standard", "no_preference", 12.0, top_n=1, extra_excluded=None,
+                12.0, top_n=1, extra_excluded=None,
             )
             if not cands:
                 break
@@ -163,8 +162,7 @@ async def registered_trajectory(
         for _ in range(n_swipes):
             if policy == "model":
                 results = await rec.recommend(
-                    mood="no_preference", dietary_mode="standard", hour=12.0,
-                    top_n=1, excluded_ids=[],
+                    hour=12.0, top_n=1, excluded_ids=[],
                 )
                 if not results:
                     break
@@ -175,7 +173,7 @@ async def registered_trajectory(
                 )
             else:
                 _, cands = await build_intake(
-                    conn, sessions, db_user, "standard", "no_preference", 12.0, sid
+                    conn, sessions, db_user, 12.0, sid
                 )
                 if not cands:
                     break

@@ -14,8 +14,6 @@ from model.features import (
     PROTEIN_TYPES,
     CUISINE_TYPES,
     CARB_BASES,
-    DIETARY_MODES,
-    MOODS,
     CONTINUOUS_ATTRS,
     INTERACTION_TERMS,
     FOOD_DIM,
@@ -75,25 +73,22 @@ class TestEncodeContext:
 
     def test_default_context(self):
         ctx = encode_context()
-        # standard dietary mode = first position
-        assert ctx[0] == 1.0
-        # no_preference mood
-        mood_start = len(DIETARY_MODES) + 2  # after diet + time
-        assert ctx[mood_start + MOODS.index("no_preference")] == 1.0
+        # Context is [time_sin, time_cos, rejection, days]; defaults zero the tail.
+        assert ctx[-2] == 0.0
+        assert ctx[-1] == 0.0
 
     def test_time_encoding_cyclical(self):
         ctx_noon = encode_context(hour=12.0)
         ctx_midnight = encode_context(hour=0.0)
-        # Different times should produce different sin/cos
-        diet_len = len(DIETARY_MODES)
-        assert ctx_noon[diet_len] != ctx_midnight[diet_len]
+        # Different times should produce different sin/cos (time is at index 0/1)
+        assert ctx_noon[0] != ctx_midnight[0] or ctx_noon[1] != ctx_midnight[1]
 
     def test_time_encoding_24h_wraps(self):
         ctx_0 = encode_context(hour=0.0)
         ctx_24 = encode_context(hour=24.0)
-        diet_len = len(DIETARY_MODES)
         # hour=0 and hour=24 should be same (cyclical)
-        assert abs(ctx_0[diet_len] - ctx_24[diet_len]) < 1e-10
+        assert abs(ctx_0[0] - ctx_24[0]) < 1e-10
+        assert abs(ctx_0[1] - ctx_24[1]) < 1e-10
 
     def test_rejection_rate_stored(self):
         ctx = encode_context(recent_rejection_rate=0.7)
@@ -107,13 +102,13 @@ class TestEncodeContext:
 class TestBuildFeatureVector:
     def test_total_dimension(self):
         item = {"spice_level": 0.5, "protein_type": "chicken", "cuisine_type": "thai", "carb_base": "rice"}
-        context = {"dietary_mode": "standard", "hour": 12.0, "mood": "comfort"}
+        context = {"hour": 12.0}
         vec = build_feature_vector(item, context)
         assert len(vec) == TOTAL_DIM
 
     def test_food_and_context_concatenated(self):
         item = {"spice_level": 0.9}
-        context = {"dietary_mode": "vegan", "hour": 6.0, "mood": "adventurous"}
+        context = {"hour": 6.0}
         vec = build_feature_vector(item, context)
         # First element is spice_level
         assert vec[0] == 0.9
@@ -127,7 +122,7 @@ class TestDimensionConsistency:
         assert FOOD_DIM == expected
 
     def test_context_dim_matches(self):
-        expected = len(DIETARY_MODES) + 2 + len(MOODS) + 2  # diet + time_sin/cos + mood + rejection + days
+        expected = 2 + 2  # time_sin/cos + rejection + days
         assert CONTEXT_DIM == expected
 
     def test_interaction_dim_matches_toggle(self):
@@ -141,41 +136,18 @@ class TestDimensionConsistency:
 class TestEncodeInteractions:
     def test_output_dimension(self):
         item = {"spice_level": 0.8, "temperature": 0.9, "dairy_content": 0.5}
-        ctx = {"mood": "comfort", "dietary_mode": "vegan", "hour": 19.0}
+        ctx = {"hour": 19.0}
         vec = encode_interactions(item, ctx)
         # encode_interactions always returns full term length regardless of toggle
         assert len(vec) == len(INTERACTION_TERMS)
 
-    def test_mood_interaction_active(self):
-        # spice×comfort is index 0
-        item = {"spice_level": 0.7}
-        ctx = {"mood": "comfort", "hour": 12.0}
-        vec = encode_interactions(item, ctx)
-        assert vec[0] == 0.7
-
-    def test_mood_interaction_inactive(self):
-        item = {"spice_level": 0.7}
-        ctx = {"mood": "adventurous", "hour": 12.0}
-        vec = encode_interactions(item, ctx)
-        # spice×comfort = 0 since mood != comfort
-        assert vec[0] == 0.0
-        # spice×adventurous (index 1) = 0.7
-        assert vec[1] == 0.7
-
-    def test_dietary_mode_vegan_dairy(self):
-        # dairy×vegan is index 4
-        item = {"dairy_content": 0.6}
-        ctx = {"dietary_mode": "vegan", "hour": 12.0}
-        vec = encode_interactions(item, ctx)
-        assert vec[4] == 0.6
-
     def test_time_interaction_present(self):
-        # temperature×time_sin/cos
+        # temperature×time_sin (index 0) / time_cos (index 1)
         item = {"temperature": 1.0}
         ctx = {"hour": 6.0}
         vec = encode_interactions(item, ctx)
         # not zero (sin/cos at 6h are nonzero)
-        assert vec[2] != 0.0 or vec[3] != 0.0
+        assert vec[0] != 0.0 or vec[1] != 0.0
 
 
 class TestFeatureSchema:
