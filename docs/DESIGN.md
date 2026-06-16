@@ -166,7 +166,9 @@ The card should feel like a physical card — white, elevated, rounded corners (
 - **Description**: Optional 1–2 sentence excerpt in warm gray. Truncate if long.
 - **Buttons**: Two circles, 72px diameter. ✗ on left (red tint), ✓ on right (green tint). Scale up 10% on hover. Disabled state = 40% opacity.
 
-**Drag-to-swipe animation**: The card follows the drag gesture with tilt proportional to horizontal offset (±20° max). NOPE (red, top-left) and LIKE (green, top-right) overlays fade in as the card is dragged, reaching full opacity at ~80px of drag. Past a 120px CSS threshold the card flies off screen; below that threshold it springs back to center with cubic-bezier easing. `touchAction: none` prevents native scroll stealing on mobile.
+**Drag-to-swipe animation**: The card follows the drag gesture with tilt proportional to horizontal offset (±20° max). NOPE (red, top-left) and LIKE (green, top-right) overlays fade in as the card is dragged, reaching full opacity at ~80px of drag. Past a 120px CSS threshold the card flies off screen; below that threshold it springs back to center with cubic-bezier easing.
+
+**Touch axis-lock (scroll vs swipe)**: The card uses `touchAction: pan-y` so the page still scrolls vertically through the card — users can reach the header/top without aiming for a gutter. On touch, the gesture stays *pending* until the first finger move clears a 10px deadzone, then locks: `|dx| > |dy|` → horizontal swipe (drag the card, `preventDefault` the scroll); otherwise → vertical scroll (release, browser scrolls natively). Ties resolve to scroll. Mouse drag is exempt (no native-scroll conflict — wheel scrolls regardless) and commits to a swipe immediately.
 
 ---
 

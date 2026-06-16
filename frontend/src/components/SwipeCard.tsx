@@ -60,11 +60,15 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
   const [dragX, setDragX] = useState(0)
   const [dragY, setDragY] = useState(0)
   const [isDragging, setIsDragging] = useState(false)
+  // Touch gesture is "pending" until the first move decides its axis (swipe vs scroll).
+  const [pendingTouch, setPendingTouch] = useState(false)
 
   useEffect(() => { setCuisineImgFailed(false) }, [food.id])
   const neverTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const dragStart = useRef<{ x: number; y: number } | null>(null)
   const dragOriginatedOnButton = useRef(false)
+  // Axis decision for the current touch gesture. Mouse never uses this (no scroll conflict).
+  const axisLock = useRef<'none' | 'swipe' | 'scroll'>('none')
 
   const handleSwipe = useCallback(
     (direction: SwipeDirection) => {
@@ -89,7 +93,12 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
     setNeverHeld(false)
   }
 
-  function handlePointerDown(clientX: number, clientY: number, target: EventTarget) {
+  function handlePointerDown(
+    clientX: number,
+    clientY: number,
+    target: EventTarget,
+    pointer: 'mouse' | 'touch',
+  ) {
     if ((target as HTMLElement).closest('button, a')) {
       dragOriginatedOnButton.current = true
       return
@@ -97,9 +106,16 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
     dragOriginatedOnButton.current = false
     if (animDir || disabled) return
     dragStart.current = { x: clientX, y: clientY }
-    setIsDragging(true)
     setDragX(0)
     setDragY(0)
+    if (pointer === 'mouse') {
+      // Mouse has no native-scroll conflict: commit to the drag immediately.
+      setIsDragging(true)
+    } else {
+      // Touch: stay pending until the first move locks the axis (swipe vs scroll).
+      axisLock.current = 'none'
+      setPendingTouch(true)
+    }
   }
 
   function handlePointerMove(clientX: number, clientY: number) {
@@ -120,25 +136,54 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
   }
 
   useEffect(() => {
-    if (!isDragging) return
+    if (!isDragging && !pendingTouch) return
     function onMouseMove(e: MouseEvent) { handlePointerMove(e.clientX, e.clientY) }
     function onMouseUp() { handlePointerUp() }
     function onTouchMove(e: TouchEvent) {
-      e.preventDefault()
-      handlePointerMove(e.touches[0].clientX, e.touches[0].clientY)
+      if (!dragStart.current) return
+      const t = e.touches[0]
+      const dx = t.clientX - dragStart.current.x
+      const dy = t.clientY - dragStart.current.y
+      // Decide the axis on the first significant move (10px deadzone, ties -> scroll).
+      if (axisLock.current === 'none') {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) < 10) return
+        if (Math.abs(dx) > Math.abs(dy)) {
+          axisLock.current = 'swipe'
+          setPendingTouch(false)
+          setIsDragging(true)
+        } else {
+          // Vertical / ambiguous: release so the browser scrolls the page natively.
+          axisLock.current = 'scroll'
+          dragStart.current = null
+          setPendingTouch(false)
+          return
+        }
+      }
+      if (axisLock.current === 'swipe') {
+        e.preventDefault()
+        setDragX(dx)
+        setDragY(dy)
+      }
     }
-    function onTouchEnd() { handlePointerUp() }
+    function onTouchEnd() {
+      axisLock.current = 'none'
+      setPendingTouch(false)
+      dragStart.current = null
+      handlePointerUp()
+    }
     window.addEventListener('mousemove', onMouseMove)
     window.addEventListener('mouseup', onMouseUp)
     window.addEventListener('touchmove', onTouchMove, { passive: false })
     window.addEventListener('touchend', onTouchEnd)
+    window.addEventListener('touchcancel', onTouchEnd)
     return () => {
       window.removeEventListener('mousemove', onMouseMove)
       window.removeEventListener('mouseup', onMouseUp)
       window.removeEventListener('touchmove', onTouchMove)
       window.removeEventListener('touchend', onTouchEnd)
+      window.removeEventListener('touchcancel', onTouchEnd)
     }
-  }, [isDragging, dragX])
+  }, [isDragging, pendingTouch, dragX])
 
   const cuisine = food.cuisine_type?.toLowerCase() ?? ''
   const emoji = CUISINE_EMOJI[cuisine] ?? '🍽️'
@@ -172,8 +217,8 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
 
       {/* Card */}
       <div
-        onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, e.target)}
-        onTouchStart={(e) => handlePointerDown(e.touches[0].clientX, e.touches[0].clientY, e.target)}
+        onMouseDown={(e) => handlePointerDown(e.clientX, e.clientY, e.target, 'mouse')}
+        onTouchStart={(e) => handlePointerDown(e.touches[0].clientX, e.touches[0].clientY, e.target, 'touch')}
         style={{
           background: bgColor,
           borderRadius: 24,
@@ -183,7 +228,7 @@ export const SwipeCard = forwardRef<SwipeCardHandle, SwipeCardProps>(function Sw
           display: 'flex',
           flexDirection: 'column',
           cursor: isDragging ? 'grabbing' : disabled ? 'default' : 'grab',
-          touchAction: 'none',
+          touchAction: 'pan-y',
           userSelect: 'none',
           WebkitUserSelect: 'none',
           transform: animDir === 'left' || animDir === 'never'
