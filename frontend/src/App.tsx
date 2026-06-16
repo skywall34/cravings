@@ -181,7 +181,7 @@ export default function App() {
         await patchDietaryRestrictions(dietary.dietaryRestrictions)
       } catch { /* non-fatal */ }
     }
-    // Reset session so post-adjust session starts clean (also harmless on first-run onboarding)
+    rec.setDietary?.(dietary)
     rec.reset()
     setScreen('swipe')
     await loadNextCard()
@@ -190,9 +190,11 @@ export default function App() {
   const handleOnboardingSkip = useCallback(async (dietary: GuestPrefs) => {
     await saveDietaryToStorage(dietary)
     setGuestDietary(dietary)
+    rec.setDietary?.(dietary)
+    rec.reset()
     setScreen('swipe')
     await loadNextCard()
-  }, [])
+  }, [rec])
 
   async function handleNewSession() {
     rec.reset()

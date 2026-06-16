@@ -23,8 +23,13 @@ export function useRecommender(user: UserInfo | null, guestDietary: GuestPrefs):
     rec: makeRecommender(user, guestDietary, prodTransport),
   }))
 
-  if (store.identity !== identity || store.dietary !== guestDietary) {
+  if (store.identity !== identity) {
     setStore({ identity, dietary: guestDietary, rec: makeRecommender(user, guestDietary, prodTransport) })
+  } else if (store.dietary !== guestDietary) {
+    // Update dietary in-place — avoids rebuilding the recommender (which rotates sessionId)
+    // which would cause a snapshot session mismatch if a card was fetched before the rebuild.
+    store.rec.setDietary?.(guestDietary)
+    setStore(s => ({ ...s, dietary: guestDietary }))
   }
 
   const rec = store.rec

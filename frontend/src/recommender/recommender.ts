@@ -35,6 +35,8 @@ export interface Recommender {
   // useSyncExternalStore — see the bound arrow fields in BaseRecommender.
   getState: () => RecommenderState
   subscribe: (listener: () => void) => () => void
+  /** Guest-only: update dietary prefs without rebuilding (avoids session ID rotation). */
+  setDietary?(prefs: GuestPrefs): void
 }
 
 function randomId(): string {
@@ -102,6 +104,10 @@ class GuestRecommender extends BaseRecommender {
     private transport: RecommenderTransport,
   ) {
     super()
+  }
+
+  setDietary(prefs: GuestPrefs): void {
+    this.guestDietary = prefs
   }
 
   protected onReset(): void {
