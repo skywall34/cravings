@@ -317,9 +317,17 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 | P26 | VLM-gated image ingest + Openverse fallback: images pipeline extended with visual quality gate and Openverse as an additional fallback source. | ✅ Complete |
 | P27 | Tinder-style drag-to-swipe (Jun 2026): `SwipeCard.tsx` — card follows mouse/touch drag with proportional tilt (±20°), NOPE/LIKE overlays fade in during drag (full opacity at 80px), flies off screen past 120px CSS threshold, springs back with cubic-bezier easing below threshold. Keyboard arrow-key swipe removed from `App.tsx` (mobile-first). Hint text `← / → arrow keys · hold ✕ for Never` removed from card bottom. Verified on Android emulator (ADB swipe) and web. | ✅ Complete |
 | P27.1 | Touch axis-lock so the page scrolls through the card (Jun 2026): the original P27 used `touchAction: none` + unconditional `preventDefault`, which stole *all* vertical scroll — users couldn't reach the header without aiming for the 16px side gutter. `SwipeCard.tsx` now uses `touchAction: pan-y` and defers the touch gesture until the first move clears a 10px deadzone: `|dx| > |dy|` → swipe (drag + `preventDefault`), else → release for native vertical scroll (ties → scroll). Mouse drag unchanged (commits immediately; no scroll conflict). | ✅ Complete |
+| P29 | Paid-tier UI (Jun 2026): client-side premium flag (`cravings_premium` key via storage seam, `getPremium`/`setPremium` in `api.ts`). New components: `Archetype.tsx` (5-axis taste system, MOCK data, `deriveArchetype`, `ArchetypeHero`, `AxisBars`, `LockOverlay`, `PremiumBadge`), `PaywallSheet.tsx` (mock Stripe $4.99 one-time, form→processing→success, "Demo only"), `Insights.tsx` (paid hub: free = archetype name + blurred sections; premium = full radar + drift chart + monthly recap). Profile stripped to identity row + 3-up stat grid + `ArchetypeTeaser` → Insights. `AuthMenu` gains Insights entry (✨ / UPGRADE badge). `LoginForm`/`RegisterForm` restyled (pill button, focus-accent border, password-strength meter, guest callout). **No backend/API changes — premium is local-only mock.** Follow-up: real Stripe, backend archetype/drift projection endpoint. | ✅ Complete |
 | P28 | Remove mood + session dietary_mode (Jun 2026, ADR-0013): deleted the swipe-screen `MoodSelector` (mood + dietary_mode pills) — swipe screen is now progress + card + footer. Both dropped from the model: `encode_context` loses the two one-hots (`CONTEXT_DIM 12→4`, `TOTAL_DIM 62→54`), `INTERACTION_TERMS` keeps only `temperature×time`. `Snapshot`/intake/recommend-swipe seam/`/api/recommend` query no longer carry them; `swipe_events.mood`/`dietary_mode` are deprecated nullable tombstones; `mood_breakdown` + `MoodDonut` removed (persona "adventurous vs cozy" axis re-derived from cuisine variety). Diet is now solely the mandatory onboarding restrictions hard-filter. One-time model reset via the existing self-heal dim guard (verified live: `user_id 1 dim=52→54 reset`, 200 OK). Accuracy held: guest 83.0%/+34.7pp, registered 87.3%/+34.1pp (30×50 sweep). Android debug APK rebuilt OK. 334 tests + 2 slow SLAs pass. | ✅ Complete |
 
 ## Next Steps (for next session)
+
+**P29 follow-ups (open):**
+- **Admin access (test bypass)**: admin user must reach all premium functionality without paying — flip `isPremium` true regardless of the `cravings_premium` flag / payment. Design open (decide next session): server-side `is_admin` column on `users` → `/api/users/me` returns `is_admin`, frontend treats `is_admin || premium` as unlocked; OR a dev-only client toggle gated on a build flag. Must NOT ship a path that lets a normal user self-grant premium. Tie into the test session below (admin account drives the full workflow end-to-end).
+- **Test session — full workflow (next session)**: build an end-to-end test that walks the whole flow — onboarding → swipe session → summary → register/login → profile/stats → Insights (free gated + premium unlocked via admin) → paywall mock. Use the admin bypass so premium screens are reachable without the Stripe mock.
+- **Real Stripe payment**: replace mock `PaywallSheet` with real Stripe Checkout or Elements. Add `is_premium` column to `users` table, `POST /api/users/me/premium` endpoint, webhook to mark payment. Remove "Demo only" copy and `setPremium` client-side mock.
+- **Backend archetype + drift endpoint**: replace `MOCK_AXES` / `MOCK_DRIFT` in `Archetype.tsx` with real data. Add `GET /api/profile/archetype` → `{ axes: {Heat,Indulgence,Texture,Adventure,Tempo}, drift: [...], archetype_id }`. Backend derives axes from `flavor_profile` mapping + any additional model state (see `get_swipe_stats`). Frontend `Insights.tsx` fetches on mount (premium gate on backend too).
+- **Session-end archetype upsell**: add locked-archetype teaser to `SessionSummary` (show emoji + blurred name, CTA → opens PaywallSheet with context `'session'`).
 
 **P0 deploy fix verified (2026-05-23)**: token-invalidation bug closed. Deploy contract now: rebuild Docker image to ship content (cravings.db baked as `/app/seed/cravings.db` → upserted into volume DB on startup); only `images/` rsyncs. **Never** rsync `cravings.db` again. See `db/seed_sync.py` and `docs/VPS_DEPLOY.md`.
 
@@ -377,17 +385,20 @@ cravings/
 │   ├── src/
 │   │   ├── App.tsx         # Root: auth init, session state, swipe loop
 │   │   ├── App.css         # All styles
-│   │   ├── api.ts          # fetch wrappers + interfaces; apiBase() (web=/cravings, native=prod), assetUrl() (native prefixes relative img URLs with prod origin), async token, callback 401
+│   │   ├── api.ts          # fetch wrappers + interfaces; apiBase() (web=/cravings, native=prod), assetUrl() (native prefixes relative img URLs with prod origin), async token, callback 401; getPremium/setPremium (client-side premium flag, cravings_premium key)
 │   │   ├── storage.ts      # Storage seam: async get/set/remove — web→localStorage, native→@capacitor/preferences
 │   │   ├── vite-env.d.ts   # Vite client types + VITE_API_BASE_URL (set only in the Capacitor build)
 │   │   ├── components/
 │   │   │   ├── SwipeCard.tsx       # Food card with drag-to-swipe (tilt, NOPE/LIKE overlays, 120px threshold, spring snap-back; touch axis-lock — pan-y + 10px deadzone so vertical drag scrolls the page, horizontal swipes); ✗/✓/Never buttons; cuisine image with emoji fallback; AllergenNote
 │   │   │   ├── RestaurantPanel.tsx # Nearby restaurants after right-swipe; AllergenNote
-│   │   │   ├── AuthMenu.tsx        # Header dropdown: guest→Login/Register, registered→Profile/Logout
-│   │   │   ├── LoginForm.tsx       # Email+password login
-│   │   │   ├── RegisterForm.tsx    # Registration + legal consent line (Terms / Privacy links)
-│   │   │   ├── ProfilePage.tsx     # Visual taste profile: gate card (<15 swipes) or full insights (persona, radar, gauge, affinity, donut, peak-times); password change; data export/delete (GDPR)
-│   │   │   ├── StatsCharts.tsx     # Chart primitives (all SVG, no chart lib): deriveTasteProfile, TastePersonaCard, InsightCard, FlavorRadar, YesRateGauge, CuisineAffinity, PeakTimesChart
+│   │   │   ├── AuthMenu.tsx        # Header dropdown: guest→Login/Register, registered→Profile/Insights/Logout; Insights badge = ✨ (premium) or UPGRADE pill (free)
+│   │   │   ├── LoginForm.tsx       # Email+password login — restyled pill button, focus-accent border, error box
+│   │   │   ├── RegisterForm.tsx    # Registration + PasswordStrength meter, guest ✨ callout, Terms/Privacy links
+│   │   │   ├── ProfilePage.tsx     # Simplified: identity row (avatar initial), 3-up BigStat grid, ArchetypeTeaser → Insights; YesRateGauge, CuisineAffinity, PeakTimesChart; password change; GDPR export/delete
+│   │   │   ├── Archetype.tsx       # 5-axis taste system (Heat/Indulgence/Texture/Adventure/Tempo); MOCK_AXES/MOCK_DRIFT; deriveArchetype/deriveArchetypeAt; ArchetypeHero, AxisBars, LockOverlay, LockGlyph, PremiumBadge — MOCK DATA, replace with backend projection
+│   │   │   ├── Insights.tsx        # Paid hub: free=archetype name+blurred sections, premium=full hero+radar+drift chart+monthly recap; InsightsScreen, DriftChart, DriftDeltas, MonthlyRecap, ArchetypeShiftBanner
+│   │   │   ├── PaywallSheet.tsx    # Mock Stripe $4.99 one-time bottom sheet; form→processing→success; "Demo only — no card is charged." onSuccess flips client-side premium flag
+│   │   │   ├── StatsCharts.tsx     # Chart primitives (all SVG, no chart lib): deriveTasteProfile, FlavorRadar (reused in Insights), YesRateGauge, CuisineAffinity, PeakTimesChart
 │   │   │   ├── AllergenNote.tsx    # Inline amber allergen disclaimer (best-effort, not certified)
 │   │   │   ├── ConsentBanner.tsx   # First-load cookie/session consent banner (storage-seam-persisted)
 │   │   │   └── LegalPages.tsx      # Full Privacy Policy + Terms of Service screens

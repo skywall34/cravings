@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError } from './api'
+import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError, getPremium, setPremium } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
 import * as storage from './storage'
 import { useLocation } from './hooks/useLocation'
@@ -15,6 +15,8 @@ import { AuthMenu } from './components/AuthMenu'
 import { LoginForm } from './components/LoginForm'
 import { RegisterForm } from './components/RegisterForm'
 import { ProfilePage } from './components/ProfilePage'
+import { InsightsScreen } from './components/Insights'
+import { PaywallSheet } from './components/PaywallSheet'
 import { ConsentBanner } from './components/ConsentBanner'
 import { LegalPage } from './components/LegalPages'
 import { LocationConsentModal } from './components/LocationConsentModal'
@@ -36,11 +38,13 @@ async function saveDietaryToStorage(prefs: GuestPrefs): Promise<void> {
   await storage.set(DIETARY_KEY, JSON.stringify(prefs))
 }
 
-function AppHeader({ user, onLogin, onRegister, onProfile, onLogout }: {
+function AppHeader({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout }: {
   user: UserInfo | null
+  isPremium: boolean
   onLogin: () => void
   onRegister: () => void
   onProfile: () => void
+  onInsights: () => void
   onLogout: () => void
 }) {
   return (
@@ -49,7 +53,7 @@ function AppHeader({ user, onLogin, onRegister, onProfile, onLogout }: {
         <span className="app-header-emoji">🍽️</span>
         <h1 className="app-title">Cravings</h1>
       </div>
-      <AuthMenu user={user} onLogin={onLogin} onRegister={onRegister} onProfile={onProfile} onLogout={onLogout} />
+      <AuthMenu user={user} isPremium={isPremium} onLogin={onLogin} onRegister={onRegister} onProfile={onProfile} onInsights={onInsights} onLogout={onLogout} />
     </header>
   )
 }
@@ -80,7 +84,7 @@ function SessionProgress({ count, total }: SessionProgressProps) {
   )
 }
 
-type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile' | 'privacy' | 'terms'
+type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile' | 'insights' | 'privacy' | 'terms'
 
 export default function App() {
   const swipeCardRef = useRef<SwipeCardHandle | null>(null)
@@ -97,6 +101,8 @@ export default function App() {
   const [cardKey, setCardKey] = useState(0)
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
+  const [isPremium, setIsPremium] = useState(false)
+  const [paywall, setPaywall] = useState<{ open: boolean; context: string }>({ open: false, context: '' })
 
   // Recommender seam: owns Swipe Session state (sessionId, seenIds, history) and
   // the Guest/Registered split. App never branches on identity for recommend/swipe.
@@ -129,6 +135,7 @@ export default function App() {
       try {
         const storedDietary = await loadDietaryFromStorage()
         setGuestDietary(storedDietary)
+        setIsPremium(await getPremium())
         await ensureUser()
         const token = await getToken()
         if (token) {
@@ -267,10 +274,22 @@ export default function App() {
 
   async function handleLogout() {
     await logout()
-    // Clearing currentUser flips identity → the seam rebuilds a fresh session.
+    await setPremium(false)
+    setIsPremium(false)
     setCurrentUser(null)
     setGuestDietary(await loadDietaryFromStorage())
     setScreen('onboarding')
+  }
+
+  function handleUpgrade(context: string) {
+    setPaywall({ open: true, context })
+  }
+
+  async function handlePurchaseSuccess() {
+    await setPremium(true)
+    setIsPremium(true)
+    setPaywall({ open: false, context: '' })
+    setScreen('insights')
   }
 
   if (loading && screen === 'swipe' && !food) {
@@ -283,9 +302,11 @@ export default function App() {
 
   const authMenuProps = {
     user: currentUser,
+    isPremium,
     onLogin: () => navigateTo('login'),
     onRegister: () => navigateTo('register'),
     onProfile: () => navigateTo('profile'),
+    onInsights: () => navigateTo('insights'),
     onLogout: () => void handleLogout(),
   }
 
@@ -321,13 +342,24 @@ export default function App() {
       {screen === 'profile' && currentUser && (
         <ProfilePage
           user={currentUser}
+          isPremium={isPremium}
           onBack={navigateBack}
+          onViewInsights={() => navigateTo('insights')}
           onDeleteAccount={() => {
-            // Identity flip rebuilds a fresh session via the seam.
+            void setPremium(false)
+            setIsPremium(false)
             setCurrentUser(null)
             setGuestDietary(EMPTY_DIETARY)
             setScreen('onboarding')
           }}
+        />
+      )}
+
+      {screen === 'insights' && (
+        <InsightsScreen
+          isPremium={isPremium}
+          onBack={navigateBack}
+          onUpgrade={handleUpgrade}
         />
       )}
 
@@ -399,6 +431,13 @@ export default function App() {
       {(screen === 'privacy' || screen === 'terms') && (
         <LegalPage doc={screen} onBack={navigateBack} />
       )}
+
+      <PaywallSheet
+        open={paywall.open}
+        context={paywall.context}
+        onClose={() => setPaywall(p => ({ ...p, open: false }))}
+        onSuccess={() => void handlePurchaseSuccess()}
+      />
 
       {/* Location consent overlay — shown before first nearby lookup */}
       <LocationConsentModal

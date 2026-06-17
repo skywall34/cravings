@@ -297,3 +297,20 @@ export async function exportData(): Promise<Blob> {
   if (!res.ok) throw new Error(`Export failed: ${res.status}`)
   return res.blob()
 }
+
+// ── Client-side premium flag (mock — no backend) ──────────────────────
+// Real Stripe + backend is_premium persistence is a follow-up task.
+const PREMIUM_KEY = 'cravings_premium'
+
+export async function getPremium(): Promise<boolean> {
+  const v = await storage.get(PREMIUM_KEY)
+  return v === 'true'
+}
+
+export async function setPremium(v: boolean): Promise<void> {
+  if (v) {
+    await storage.set(PREMIUM_KEY, 'true')
+  } else {
+    await storage.remove(PREMIUM_KEY)
+  }
+}

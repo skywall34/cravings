@@ -3,13 +3,15 @@ import type { UserInfo } from '../api'
 
 interface AuthMenuProps {
   user: UserInfo | null
+  isPremium: boolean
   onLogin: () => void
   onRegister: () => void
   onProfile: () => void
+  onInsights: () => void
   onLogout: () => void
 }
 
-export function AuthMenu({ user, onLogin, onRegister, onProfile, onLogout }: AuthMenuProps) {
+export function AuthMenu({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout }: AuthMenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -57,6 +59,20 @@ export function AuthMenu({ user, onLogin, onRegister, onProfile, onLogout }: Aut
                 {user.email}
               </div>
               <MenuItem onClick={() => { setOpen(false); onProfile() }}>Profile &amp; Stats</MenuItem>
+              <MenuItem onClick={() => { setOpen(false); onInsights() }}>
+                <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                  <span>Insights</span>
+                  {isPremium
+                    ? <span style={{ fontSize: '0.72rem' }}>✨</span>
+                    : <span style={{
+                        fontSize: '0.6rem', fontWeight: 800, letterSpacing: '0.08em',
+                        padding: '2px 6px', borderRadius: 100,
+                        background: 'linear-gradient(120deg, #F0B429, #D97706)',
+                        color: '#4A3000',
+                      }}>UPGRADE</span>
+                  }
+                </span>
+              </MenuItem>
               <MenuItem onClick={() => { setOpen(false); onLogout() }} danger>Log out</MenuItem>
             </>
           ) : (
