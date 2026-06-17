@@ -30,6 +30,10 @@ CREATE TABLE IF NOT EXISTS users (
     password_changed_at TIMESTAMP,
     token_issued_at TIMESTAMP,
 
+    -- Premium
+    is_premium INTEGER NOT NULL DEFAULT 0,
+    premium_since TIMESTAMP,
+
     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
@@ -113,6 +117,15 @@ CREATE TABLE IF NOT EXISTS swipe_events (
     mood TEXT,               -- deprecated, no longer written (NULL for new rows)
     recent_rejection_rate REAL NOT NULL DEFAULT 0.0,
     days_since_last_session REAL NOT NULL DEFAULT 0.0
+);
+
+CREATE TABLE IF NOT EXISTS billing_sessions (
+    session_id TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    status TEXT NOT NULL DEFAULT 'pending',  -- pending | completed | failed
+    amount_cents INTEGER NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    completed_at TIMESTAMP
 );
 
 CREATE TABLE IF NOT EXISTS user_item_impressions (

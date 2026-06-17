@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError, getPremium, setPremium } from './api'
+import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError, effectivePremium } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
 import * as storage from './storage'
 import { useLocation } from './hooks/useLocation'
@@ -101,8 +101,8 @@ export default function App() {
   const [cardKey, setCardKey] = useState(0)
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
   const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
-  const [isPremium, setIsPremium] = useState(false)
   const [paywall, setPaywall] = useState<{ open: boolean; context: string }>({ open: false, context: '' })
+  const isPremium = effectivePremium(currentUser)
 
   // Recommender seam: owns Swipe Session state (sessionId, seenIds, history) and
   // the Guest/Registered split. App never branches on identity for recommend/swipe.
@@ -135,13 +135,23 @@ export default function App() {
       try {
         const storedDietary = await loadDietaryFromStorage()
         setGuestDietary(storedDietary)
-        setIsPremium(await getPremium())
         await ensureUser()
         const token = await getToken()
         if (token) {
           const me = await getMe()
           setCurrentUser(me)
-          if (!me.onboarding_complete) {
+          const params = new URLSearchParams(window.location.search)
+          const checkout = params.get('checkout')
+          if (checkout === 'success') {
+            // Stripe redirect back — premium granted by webhook; refetch me
+            window.history.replaceState({}, '', window.location.pathname)
+            setScreen('insights')
+          } else if (checkout === 'cancel') {
+            window.history.replaceState({}, '', window.location.pathname)
+            setScreen('swipe')
+            setPaywall({ open: true, context: '' })
+            await loadNextCard()
+          } else if (!me.onboarding_complete) {
             setScreen('onboarding')
           } else {
             setScreen('swipe')
@@ -274,20 +284,22 @@ export default function App() {
 
   async function handleLogout() {
     await logout()
-    await setPremium(false)
-    setIsPremium(false)
     setCurrentUser(null)
     setGuestDietary(await loadDietaryFromStorage())
     setScreen('onboarding')
   }
 
   function handleUpgrade(context: string) {
+    if (!currentUser?.is_registered) {
+      navigateTo('register')
+      return
+    }
     setPaywall({ open: true, context })
   }
 
   async function handlePurchaseSuccess() {
-    await setPremium(true)
-    setIsPremium(true)
+    const me = await getMe()
+    setCurrentUser(me)
     setPaywall({ open: false, context: '' })
     setScreen('insights')
   }
@@ -346,8 +358,6 @@ export default function App() {
           onBack={navigateBack}
           onViewInsights={() => navigateTo('insights')}
           onDeleteAccount={() => {
-            void setPremium(false)
-            setIsPremium(false)
             setCurrentUser(null)
             setGuestDietary(EMPTY_DIETARY)
             setScreen('onboarding')

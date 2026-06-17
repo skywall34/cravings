@@ -318,16 +318,15 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 | P27 | Tinder-style drag-to-swipe (Jun 2026): `SwipeCard.tsx` — card follows mouse/touch drag with proportional tilt (±20°), NOPE/LIKE overlays fade in during drag (full opacity at 80px), flies off screen past 120px CSS threshold, springs back with cubic-bezier easing below threshold. Keyboard arrow-key swipe removed from `App.tsx` (mobile-first). Hint text `← / → arrow keys · hold ✕ for Never` removed from card bottom. Verified on Android emulator (ADB swipe) and web. | ✅ Complete |
 | P27.1 | Touch axis-lock so the page scrolls through the card (Jun 2026): the original P27 used `touchAction: none` + unconditional `preventDefault`, which stole *all* vertical scroll — users couldn't reach the header without aiming for the 16px side gutter. `SwipeCard.tsx` now uses `touchAction: pan-y` and defers the touch gesture until the first move clears a 10px deadzone: `|dx| > |dy|` → swipe (drag + `preventDefault`), else → release for native vertical scroll (ties → scroll). Mouse drag unchanged (commits immediately; no scroll conflict). | ✅ Complete |
 | P29 | Paid-tier UI (Jun 2026): client-side premium flag (`cravings_premium` key via storage seam, `getPremium`/`setPremium` in `api.ts`). New components: `Archetype.tsx` (5-axis taste system, MOCK data, `deriveArchetype`, `ArchetypeHero`, `AxisBars`, `LockOverlay`, `PremiumBadge`), `PaywallSheet.tsx` (mock Stripe $4.99 one-time, form→processing→success, "Demo only"), `Insights.tsx` (paid hub: free = archetype name + blurred sections; premium = full radar + drift chart + monthly recap). Profile stripped to identity row + 3-up stat grid + `ArchetypeTeaser` → Insights. `AuthMenu` gains Insights entry (✨ / UPGRADE badge). `LoginForm`/`RegisterForm` restyled (pill button, focus-accent border, password-strength meter, guest callout). **No backend/API changes — premium is local-only mock.** Follow-up: real Stripe, backend archetype/drift projection endpoint. | ✅ Complete |
+| P30 | Backend payment tier + Stripe sandbox (Jun 2026): real billing backend behind a `PaymentProvider` seam (`billing.py`; mirrors `recommender.py` adapter pattern). `MockProvider` (offline/CI default, self-fired signed webhook ~1.5s after checkout) + real `StripeProvider` (Stripe Checkout Sessions, sandbox test-mode keys). DB: `users.is_premium`/`premium_since` columns + `billing_sessions` audit table. Routes: `POST /api/billing/checkout` (registered-only, returns `{session_id, amount_cents, provider, url}`), `POST /api/billing/webhook` (sig-verified, only path that flips `is_premium`, idempotent). Identity flags: `is_premium` + `is_admin` (email allowlist `CRAVINGS_ADMIN_EMAILS`, never a DB column) added to `UserInfoOut` and `AuthResultOut`. Frontend: `effectivePremium(user)` helper, `createCheckout()` in `api.ts`, `PaywallSheet` branches on `url` (Stripe → redirect, mock → in-app animation), Stripe return URL handling (`?checkout=success/cancel`). Retired `getPremium`/`setPremium` localStorage mock. 352 tests pass (18 new billing tests; 334 prior unaffected). | ✅ Complete |
 | P28 | Remove mood + session dietary_mode (Jun 2026, ADR-0013): deleted the swipe-screen `MoodSelector` (mood + dietary_mode pills) — swipe screen is now progress + card + footer. Both dropped from the model: `encode_context` loses the two one-hots (`CONTEXT_DIM 12→4`, `TOTAL_DIM 62→54`), `INTERACTION_TERMS` keeps only `temperature×time`. `Snapshot`/intake/recommend-swipe seam/`/api/recommend` query no longer carry them; `swipe_events.mood`/`dietary_mode` are deprecated nullable tombstones; `mood_breakdown` + `MoodDonut` removed (persona "adventurous vs cozy" axis re-derived from cuisine variety). Diet is now solely the mandatory onboarding restrictions hard-filter. One-time model reset via the existing self-heal dim guard (verified live: `user_id 1 dim=52→54 reset`, 200 OK). Accuracy held: guest 83.0%/+34.7pp, registered 87.3%/+34.1pp (30×50 sweep). Android debug APK rebuilt OK. 334 tests + 2 slow SLAs pass. | ✅ Complete |
 
 ## Next Steps (for next session)
 
-**P29 follow-ups (open):**
-- **Admin access (test bypass)**: admin user must reach all premium functionality without paying — flip `isPremium` true regardless of the `cravings_premium` flag / payment. Design open (decide next session): server-side `is_admin` column on `users` → `/api/users/me` returns `is_admin`, frontend treats `is_admin || premium` as unlocked; OR a dev-only client toggle gated on a build flag. Must NOT ship a path that lets a normal user self-grant premium. Tie into the test session below (admin account drives the full workflow end-to-end).
-- **Test session — full workflow (next session)**: build an end-to-end test that walks the whole flow — onboarding → swipe session → summary → register/login → profile/stats → Insights (free gated + premium unlocked via admin) → paywall mock. Use the admin bypass so premium screens are reachable without the Stripe mock.
-- **Real Stripe payment**: replace mock `PaywallSheet` with real Stripe Checkout or Elements. Add `is_premium` column to `users` table, `POST /api/users/me/premium` endpoint, webhook to mark payment. Remove "Demo only" copy and `setPremium` client-side mock.
+**P30 shipped. Remaining open work:**
 - **Backend archetype + drift endpoint**: replace `MOCK_AXES` / `MOCK_DRIFT` in `Archetype.tsx` with real data. Add `GET /api/profile/archetype` → `{ axes: {Heat,Indulgence,Texture,Adventure,Tempo}, drift: [...], archetype_id }`. Backend derives axes from `flavor_profile` mapping + any additional model state (see `get_swipe_stats`). Frontend `Insights.tsx` fetches on mount (premium gate on backend too).
 - **Session-end archetype upsell**: add locked-archetype teaser to `SessionSummary` (show emoji + blurred name, CTA → opens PaywallSheet with context `'session'`).
+- **Stripe go-live**: switch `CRAVINGS_BILLING_PROVIDER=stripe` on VPS, set `STRIPE_WEBHOOK_SECRET` from `stripe listen` output, point Stripe dashboard webhook endpoint to `https://themshin.com/cravings/api/billing/webhook`. Remove "Test mode" copy from `PaywallSheet`. Create a `STRIPE_PRICE_ID` in the Stripe dashboard ($4.99 USD, one-time) if not already done via MCP.
 
 **P0 deploy fix verified (2026-05-23)**: token-invalidation bug closed. Deploy contract now: rebuild Docker image to ship content (cravings.db baked as `/app/seed/cravings.db` → upserted into volume DB on startup); only `images/` rsyncs. **Never** rsync `cravings.db` again. See `db/seed_sync.py` and `docs/VPS_DEPLOY.md`.
 
@@ -545,6 +544,28 @@ uv run python main.py --db cravings.db --maps-api-key YOUR_KEY
 #   CRAVINGS_SWIPE_SECRET=...         — stable HMAC key; tokens survive restarts
 #   CRAVINGS_ADMIN_TOKEN=...          — bearer token for POST /api/admin/batch
 #
+# Billing (P30):
+#   CRAVINGS_BILLING_PROVIDER=mock|stripe  — default mock (offline); stripe for sandbox dev
+#   CRAVINGS_BILLING_WEBHOOK_SECRET=...    — mock HMAC secret (any string); set for local mock
+#   CRAVINGS_PREMIUM_PRICE_CENTS=499       — price in cents (default 499 = $4.99)
+#   STRIPE_SECRET_KEY=sk_test_...          — Stripe test-mode secret key (already in .env)
+#   STRIPE_PUBLISHABLE_KEY=pk_test_...     — Stripe test-mode publishable key (already in .env)
+#   STRIPE_WEBHOOK_SECRET=whsec_...        — from `stripe listen` output; set before starting backend
+#   CRAVINGS_BASE_URL=http://localhost:8000  — used to build Stripe success/cancel redirect URLs
+#   CRAVINGS_BILLING_SUCCESS_URL=...       — optional override; defaults to /?checkout=success&...
+#   CRAVINGS_BILLING_CANCEL_URL=...        — optional override; defaults to /?checkout=cancel
+#   CRAVINGS_ADMIN_EMAILS=you@email.com    — csv of admin emails (bypass premium, no payment needed)
+#
+# Stripe sandbox dev loop:
+#   1. Set CRAVINGS_BILLING_PROVIDER=stripe in .env (or env)
+#   2. In a separate terminal: stripe listen --forward-to http://localhost:8000/cravings/api/billing/webhook
+#      → copy the printed `whsec_…` into STRIPE_WEBHOOK_SECRET, then restart backend
+#   3. Register → tap Unlock → redirect to Stripe → pay with test card:
+#        4242 4242 4242 4242  (any future date, any CVC)  — succeeds
+#        4000 0000 0000 0002  — card declined, no grant
+#      More test cards: /stripe:test-cards  (Claude Stripe plugin skill)
+#   4. Webhook fires → premium granted → reload confirms server-persisted.
+#
 # Optional tuning:
 #   CRAVINGS_SESSION_MAX_SWIPES=10    — swipes per session before session_complete (default 10)
 #   CRAVINGS_LEFT_SWIPE_REWARD=0.3    — reward signal for left-swipes; 0=hard veto, 1=same as right (default 0.3)
@@ -615,9 +636,10 @@ docker run -p 8080:8080 \
 # Public (no auth):
 #   GET  /api/health
 #   POST /api/auth/login  {"email":"...","password":"..."}
-#                    → {id, name, email, api_token, is_registered, onboarding_complete}
+#                    → {id, name, email, api_token, is_registered, onboarding_complete, is_premium, is_admin}
 #   POST /api/auth/register  {"email":"...","password":"...","name":"..."}
-#                    → 201 {id, name, email, api_token, is_registered:true, onboarding_complete:false}
+#                    → 201 {id, name, email, api_token, is_registered:true, onboarding_complete:false,
+#                           is_premium:false, is_admin:<from CRAVINGS_ADMIN_EMAILS>}
 #                      Always creates a fresh row (no guest claim — ADR-0005). Email conflict: 409.
 #
 # Guest-or-auth (optional bearer — guests pass dietary + taste prefs as query/body params):
@@ -643,7 +665,8 @@ docker run -p 8080:8080 \
 #
 # Authenticated (Authorization: Bearer <token>):
 #   GET  /api/users/me  → {id, name, email, is_registered, onboarding_complete,
-#                          dietary_restrictions, safety_overrides}
+#                          dietary_restrictions, safety_overrides,
+#                          is_premium, is_admin}
 #   PATCH /api/users/me  {"dietary_restrictions":["vegetarian","gluten_free"],
 #                         "safety_overrides":["raw_fish"]}
 #                    → updated profile (same shape as GET). Partial update — omit field to keep unchanged.
@@ -680,6 +703,19 @@ docker run -p 8080:8080 \
 #   GET  /api/food-items/{id}
 #   GET  /api/restaurants
 #   GET  /api/model/status
+#
+# Billing (Authorization: Bearer <token>, registered users only):
+#   POST /api/billing/checkout
+#        → {session_id, amount_cents, provider, url}
+#          url=null for mock (PaywallSheet shows in-app animation, self-fired webhook fires ~1.5s later)
+#          url=<stripe-hosted-checkout-url> for Stripe (frontend redirects; webhook fires on payment)
+#        → 403 for guest users
+#   POST /api/billing/webhook  (no bearer; signature-verified)
+#        Headers: stripe-signature (Stripe) or x-mock-signature (mock)
+#        Body: raw JSON event payload
+#        Flips is_premium on checkout.session.completed. Idempotent.
+#        → 400 on bad/missing signature
+#        → {received: true} on success
 #
 # Admin (Authorization: Bearer <CRAVINGS_ADMIN_TOKEN>):
 #   POST /api/admin/batch  {"restaurants":[{name,location,cuisine_type,source_type},...],

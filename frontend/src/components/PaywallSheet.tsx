@@ -1,9 +1,5 @@
-// PaywallSheet.tsx — Mock Stripe payment sheet.
-// Slides up from the bottom, shows $4.99 one-time unlock, a realistic
-// (non-functional) card form, processing + success states.
-// No real Stripe — onSuccess fires the unlock.
-
 import { useState, useEffect } from 'react'
+import { createCheckout } from '../api'
 import { LockGlyph, archHex, archShift } from './Archetype'
 
 const ACCENT = '#E85D04'
@@ -19,7 +15,7 @@ const PAYWALL_FEATURES = [
   { emoji: '🗓️', title: 'Monthly recap',              sub: 'A shareable "this month in your taste" card, every month.' },
 ]
 
-type Phase = 'form' | 'processing' | 'success'
+type Phase = 'form' | 'processing' | 'redirecting' | 'success'
 
 interface PaywallSheetProps {
   open: boolean
@@ -49,11 +45,22 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
 
   if (!open) return null
 
-  function pay(e: React.FormEvent) {
+  async function pay(e: React.FormEvent) {
     e.preventDefault()
     setPhase('processing')
-    setTimeout(() => setPhase('success'), 1500)
-    setTimeout(() => { onSuccess() }, 2900)
+    try {
+      const result = await createCheckout()
+      if (result.url) {
+        setPhase('redirecting')
+        window.location.assign(result.url)
+      } else {
+        // Mock path: self-fired webhook will flip premium ~1.5s later
+        setTimeout(() => setPhase('success'), 1500)
+        setTimeout(() => { onSuccess() }, 2900)
+      }
+    } catch {
+      setPhase('form')
+    }
   }
 
   return (
@@ -132,7 +139,7 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
             </div>
 
             {/* mock card form */}
-            <form onSubmit={pay}>
+            <form onSubmit={e => { void pay(e) }}>
               <div style={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: TEXT_SUB, marginBottom: 8 }}>
                 Card details
               </div>
@@ -163,16 +170,18 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
 
               <button
                 type="submit"
-                disabled={phase === 'processing'}
+                disabled={phase === 'processing' || phase === 'redirecting'}
                 style={{
                   width: '100%', padding: '15px', border: 'none', borderRadius: 100,
-                  background: phase === 'processing' ? archShift(ACCENT, 40) : ACCENT, color: '#fff',
-                  fontSize: '1.02rem', fontWeight: 800, cursor: phase === 'processing' ? 'progress' : 'pointer',
+                  background: (phase === 'processing' || phase === 'redirecting') ? archShift(ACCENT, 40) : ACCENT, color: '#fff',
+                  fontSize: '1.02rem', fontWeight: 800, cursor: (phase === 'processing' || phase === 'redirecting') ? 'progress' : 'pointer',
                   fontFamily: 'inherit', boxShadow: `0 6px 20px ${archHex(ACCENT, 0.32)}`,
                   display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
                 }}
               >
-                {phase === 'processing'
+                {phase === 'redirecting'
+                  ? <><Spinner /> Redirecting to Stripe…</>
+                  : phase === 'processing'
                   ? <><Spinner /> Processing…</>
                   : <><LockGlyph size={15} /> Pay ${price}</>}
               </button>
@@ -187,7 +196,7 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
               </span>
             </div>
             <p style={{ textAlign: 'center', margin: '12px 0 0', fontSize: '0.7rem', color: TEXT_SUB, opacity: 0.8 }}>
-              Demo only — no card is charged.
+              Test mode — use card 4242 4242 4242 4242
             </p>
           </>
         )}

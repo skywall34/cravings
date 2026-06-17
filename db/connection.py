@@ -74,6 +74,21 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     if "recent_likes_json" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN recent_likes_json TEXT")
+    if "is_premium" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")
+    if "premium_since" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN premium_since TIMESTAMP")
+
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS billing_sessions ("
+        "  session_id TEXT PRIMARY KEY,"
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  status TEXT NOT NULL DEFAULT 'pending',"
+        "  amount_cents INTEGER NOT NULL,"
+        "  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        "  completed_at TIMESTAMP"
+        ")"
+    )
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS user_item_impressions ("

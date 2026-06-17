@@ -29,6 +29,7 @@ from model_server.model_service import UserModelStore
 from model_server.recommendation_service import ModelServer
 from places import PlacesAdapter, PlacesError
 from rate_limit import RateLimiter
+from billing import make_payment_provider
 from recommender import make_recommender
 from schemas import (
     AuthResultOut,
@@ -40,6 +41,7 @@ from schemas import (
     SessionResetBody,
     SwipeBody,
     UserInfoOut,
+    is_admin_email,
 )
 from tagging import safety
 from tagging.client import tag_food_item
@@ -53,6 +55,7 @@ logger = logging.getLogger(__name__)
 _db_path: Path = Path("cravings.db")  # resolved in lifespan from env
 _model_service: ModelServer | None = None
 _places: PlacesAdapter = PlacesAdapter()
+_payment_provider = None
 _sessions: swipe.SessionStore = swipe.SessionStore()
 _session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
 _images_root: Path = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
@@ -61,7 +64,7 @@ _nearby_limiter: RateLimiter = RateLimiter(capacity=10, refill_seconds=30.0)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db_path, _model_service, _places, _sessions, _images_root, _nearby_limiter
+    global _db_path, _model_service, _places, _sessions, _images_root, _nearby_limiter, _payment_provider
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
     _images_root = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
     db.init_db(_db_path)
@@ -75,6 +78,7 @@ async def lifespan(app: FastAPI):
         capacity=int(os.environ.get("CRAVINGS_NEARBY_BURST", "10")),
         refill_seconds=float(os.environ.get("CRAVINGS_NEARBY_REFILL_SECONDS", "30")),
     )
+    _payment_provider = make_payment_provider()
 
     yield
 
@@ -381,6 +385,7 @@ async def auth_register(body: RegisterBody, conn=Depends(_get_conn)):
     return AuthResultOut(
         id=user_id, name=body.name, email=body.email, api_token=token,
         is_registered=True, onboarding_complete=False,
+        is_premium=False, is_admin=is_admin_email(body.email),
     )
 
 
@@ -394,6 +399,8 @@ async def auth_login(body: LoginBody, conn=Depends(_get_conn)):
     return AuthResultOut(
         id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
         is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
+        is_premium=bool(user.get("is_premium", 0)),
+        is_admin=is_admin_email(user["email"]),
     )
 
 
@@ -420,6 +427,49 @@ async def auth_change_password(body: PasswordBody, user=Depends(_get_user), conn
 @app.get("/api/profile/stats")
 async def profile_stats(user=Depends(_get_user), conn=Depends(_get_conn)):
     return db.get_swipe_stats(conn, user["id"])
+
+
+# ---------------------------------------------------------------------------
+# Billing routes
+# ---------------------------------------------------------------------------
+
+async def _process_webhook(payload: bytes, signature: str) -> None:
+    """Parse + apply a signed webhook event. Raises ValueError on bad sig."""
+    event = _payment_provider.verify_and_parse_webhook(payload, signature)
+    if event.event_type == "checkout.session.completed":
+        with db.db_connection(_db_path) as conn:
+            session = db.get_billing_session(conn, event.session_id)
+            if session and session["status"] != "completed":
+                db.complete_billing_session(conn, event.session_id)
+                db.set_premium(conn, event.user_id)
+
+
+@app.post("/api/billing/checkout")
+async def billing_checkout(user=Depends(_get_user), conn=Depends(_get_conn)):
+    if not user.get("email"):
+        raise HTTPException(status_code=403, detail="registered account required to purchase")
+    amount_cents = int(os.environ.get("CRAVINGS_PREMIUM_PRICE_CENTS", "499"))
+    session = _payment_provider.create_checkout_session(
+        user, amount_cents, _webhook_handler=_process_webhook
+    )
+    db.create_billing_session(conn, session.session_id, user["id"], amount_cents)
+    return {
+        "session_id": session.session_id,
+        "amount_cents": session.amount_cents,
+        "provider": session.provider,
+        "url": session.url,
+    }
+
+
+@app.post("/api/billing/webhook")
+async def billing_webhook(request: Request):
+    payload = await request.body()
+    signature = request.headers.get("stripe-signature") or request.headers.get("x-mock-signature", "")
+    try:
+        await _process_webhook(payload, signature)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="invalid webhook") from exc
+    return {"received": True}
 
 
 # ---------------------------------------------------------------------------

@@ -22,6 +22,7 @@ import db.database as _db  # noqa: E402
 @pytest_asyncio.fixture(autouse=True)
 async def reset_db():
     """Re-initialize DB and reset in-memory state before each test."""
+    os.environ["CRAVINGS_DB"] = TEST_DB  # re-assert in case another test module overwrote it
     main._db_path = Path(TEST_DB)
     Path(TEST_DB).unlink(missing_ok=True)
     _db.init_db(Path(TEST_DB))

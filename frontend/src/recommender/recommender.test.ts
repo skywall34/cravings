@@ -42,6 +42,7 @@ const GUEST_DIETARY: GuestPrefs = {
 }
 const REGISTERED: UserInfo = {
   id: 7, name: 'reg', email: 'a@b.c', is_registered: true, onboarding_complete: true,
+  is_premium: false, is_admin: false,
 }
 
 // --- factory (twin of make_recommender) ------------------------------------

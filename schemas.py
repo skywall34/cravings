@@ -9,12 +9,22 @@ Response models are the single source of each wire shape — `is_registered` is
 computed once and FastAPI filters output to the declared fields.
 """
 
+import os
 from typing import Literal
 
 from email_validator import EmailNotValidError, validate_email
 from pydantic import BaseModel, field_validator
 
 from tagging import safety
+
+
+def _admin_emails() -> frozenset[str]:
+    raw = os.environ.get("CRAVINGS_ADMIN_EMAILS", "")
+    return frozenset(e.strip().lower() for e in raw.split(",") if e.strip())
+
+
+def is_admin_email(email: str | None) -> bool:
+    return bool(email and email.lower() in _admin_emails())
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +139,8 @@ class UserInfoOut(BaseModel):
     dietary_restrictions: list[str]
     safety_overrides: list[str]
     onboarding_complete: bool
+    is_premium: bool
+    is_admin: bool
 
     @classmethod
     def of(cls, row, dietary_mask: int | None = None, safety_mask: int | None = None) -> "UserInfoOut":
@@ -142,6 +154,8 @@ class UserInfoOut(BaseModel):
             dietary_restrictions=safety.dietary_list_from_bitmask(diet),
             safety_overrides=safety.safety_list_from_bitmask(saf),
             onboarding_complete=bool(row["onboarding_complete"]),
+            is_premium=bool(row.get("is_premium", 0)),
+            is_admin=is_admin_email(row["email"]),
         )
 
 
@@ -152,3 +166,5 @@ class AuthResultOut(BaseModel):
     api_token: str
     is_registered: bool
     onboarding_complete: bool
+    is_premium: bool
+    is_admin: bool

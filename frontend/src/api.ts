@@ -138,10 +138,27 @@ export interface UserInfo {
   email: string | null
   is_registered: boolean
   onboarding_complete: boolean
+  is_premium: boolean
+  is_admin: boolean
 }
 
 export interface AuthResult extends UserInfo {
   api_token: string
+}
+
+export interface CheckoutResult {
+  session_id: string
+  amount_cents: number
+  provider: string
+  url: string | null
+}
+
+export function effectivePremium(u: UserInfo | null): boolean {
+  return !!u && (u.is_admin || u.is_premium)
+}
+
+export async function createCheckout(): Promise<CheckoutResult> {
+  return request<CheckoutResult>('POST', '/api/billing/checkout')
 }
 
 export interface SwipeStats {
@@ -298,19 +315,3 @@ export async function exportData(): Promise<Blob> {
   return res.blob()
 }
 
-// ── Client-side premium flag (mock — no backend) ──────────────────────
-// Real Stripe + backend is_premium persistence is a follow-up task.
-const PREMIUM_KEY = 'cravings_premium'
-
-export async function getPremium(): Promise<boolean> {
-  const v = await storage.get(PREMIUM_KEY)
-  return v === 'true'
-}
-
-export async function setPremium(v: boolean): Promise<void> {
-  if (v) {
-    await storage.set(PREMIUM_KEY, 'true')
-  } else {
-    await storage.remove(PREMIUM_KEY)
-  }
-}

@@ -176,3 +176,38 @@ def push_recent_like(
 
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
     conn.execute("DELETE FROM users WHERE id = ?", [user_id])
+
+
+def set_premium(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute(
+        "UPDATE users SET is_premium = 1, premium_since = CURRENT_TIMESTAMP, "
+        "updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [user_id],
+    )
+    conn.commit()
+
+
+def create_billing_session(
+    conn: sqlite3.Connection, session_id: str, user_id: int, amount_cents: int
+) -> None:
+    conn.execute(
+        "INSERT INTO billing_sessions (session_id, user_id, amount_cents) VALUES (?, ?, ?)",
+        [session_id, user_id, amount_cents],
+    )
+    conn.commit()
+
+
+def get_billing_session(conn: sqlite3.Connection, session_id: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM billing_sessions WHERE session_id = ?", [session_id]
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def complete_billing_session(conn: sqlite3.Connection, session_id: str) -> None:
+    conn.execute(
+        "UPDATE billing_sessions SET status = 'completed', completed_at = CURRENT_TIMESTAMP "
+        "WHERE session_id = ?",
+        [session_id],
+    )
+    conn.commit()
