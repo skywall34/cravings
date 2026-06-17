@@ -3,7 +3,9 @@ import { fetchStats, changePassword, deleteAccount, exportData } from '../api'
 import * as storage from '../storage'
 import type { UserInfo, SwipeStats } from '../api'
 import { deriveTasteProfile, YesRateGauge, CuisineAffinity, PeakTimesChart } from './StatsCharts'
-import { MOCK_AXES, deriveArchetype, PremiumBadge } from './Archetype'
+import { deriveArchetype, PremiumBadge, type AxesMap } from './Archetype'
+
+const BALANCED_AXES: AxesMap = { Heat: 50, Indulgence: 50, Texture: 50, Adventure: 50, Tempo: 50 }
 
 const ACCENT = '#E85D04'
 const TEXT_PRIMARY = '#1A1A1A'
@@ -214,7 +216,7 @@ function StatsSection({ stats, isPremium, onViewInsights }: { stats: SwipeStats;
 
 // ── ArchetypeTeaser — routes to Insights ───────────────────────────────
 function ArchetypeTeaser({ isPremium, onViewInsights }: { isPremium: boolean; onViewInsights: () => void }) {
-  const archetype = deriveArchetype(MOCK_AXES)
+  const archetype = deriveArchetype(BALANCED_AXES)
   return (
     <button
       onClick={onViewInsights}

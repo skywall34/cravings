@@ -429,6 +429,13 @@ async def profile_stats(user=Depends(_get_user), conn=Depends(_get_conn)):
     return db.get_swipe_stats(conn, user["id"])
 
 
+@app.get("/api/insights")
+async def insights(user=Depends(_get_user), conn=Depends(_get_conn)):
+    if not (user.get("is_premium") or is_admin_email(user.get("email"))):
+        raise HTTPException(status_code=403, detail="premium required")
+    return db.get_insights(conn, user["id"])
+
+
 # ---------------------------------------------------------------------------
 # Billing routes
 # ---------------------------------------------------------------------------

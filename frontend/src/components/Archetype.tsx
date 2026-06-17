@@ -1,6 +1,4 @@
 // Archetype.tsx — The 5-axis Taste Archetype framework (paid-tier foundation).
-// MOCK DATA: MOCK_AXES and MOCK_DRIFT are placeholders. Replace with real model
-// projection from a backend endpoint when that exists (follow-up task).
 /* eslint-disable react-refresh/only-export-components */
 
 // ── Types ─────────────────────────────────────────────────────────────
@@ -35,21 +33,6 @@ export const AXIS_META: Record<AxisKey, AxisMeta> = {
 }
 export const AXIS_KEYS = Object.keys(AXIS_META) as AxisKey[]
 
-// MOCK: replace with real taste-model snapshot
-export const MOCK_AXES: AxesMap = { Heat: 84, Indulgence: 67, Texture: 52, Adventure: 74, Tempo: 39 }
-
-// MOCK: replace with real 90-day drift from backend
-export const MOCK_DRIFT = {
-  windows: ['Mar', 'Apr', 'May', 'Jun'] as string[],
-  series: {
-    Heat:       [58, 66, 75, 84],
-    Indulgence: [70, 69, 68, 67],
-    Texture:    [60, 57, 54, 52],
-    Adventure:  [49, 58, 67, 74],
-    Tempo:      [46, 43, 41, 39],
-  } as Record<AxisKey, number[]>,
-}
-
 // ── Archetype catalogue ───────────────────────────────────────────────
 const ARCHETYPES: Array<{
   id: string; name: string; emoji: string; oneLiner: string
@@ -69,7 +52,7 @@ const BALANCED = {
   axisKey: 'Texture' as AxisKey, test: () => true,
 }
 
-export function deriveArchetype(axes: AxesMap = MOCK_AXES): ArchetypeInfo {
+export function deriveArchetype(axes: AxesMap): ArchetypeInfo {
   const match = ARCHETYPES.find(a => a.test(axes)) ?? BALANCED
   const dominant = [...AXIS_KEYS]
     .sort((x, y) => Math.abs(axes[y] - 50) - Math.abs(axes[x] - 50))
@@ -77,9 +60,9 @@ export function deriveArchetype(axes: AxesMap = MOCK_AXES): ArchetypeInfo {
   return { ...match, dominant, axes }
 }
 
-export function deriveArchetypeAt(windowIndex: number): ArchetypeInfo {
+export function deriveArchetypeAt(windowIndex: number, series: Record<AxisKey, number[]>): ArchetypeInfo {
   const axes = {} as AxesMap
-  AXIS_KEYS.forEach(k => { axes[k] = MOCK_DRIFT.series[k][windowIndex] })
+  AXIS_KEYS.forEach(k => { axes[k] = series[k][windowIndex] })
   return deriveArchetype(axes)
 }
 

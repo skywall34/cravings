@@ -242,6 +242,23 @@ export async function fetchStats(): Promise<SwipeStats> {
   return request<SwipeStats>('GET', '/api/profile/stats')
 }
 
+export interface InsightsDrift {
+  windows: string[]
+  series: Record<string, number[]>
+}
+
+export interface InsightsData {
+  axes: Record<string, number>
+  drift?: InsightsDrift | null
+  recap: { top_cuisine: string | null; top_cuisines: string[]; say_yes_rate: number; biggest_mover: string | null }
+  ready: boolean
+  total_right_swipes: number
+}
+
+export async function fetchInsights(): Promise<InsightsData> {
+  return request<InsightsData>('GET', '/api/insights')
+}
+
 export async function postOnboarding(prefs: Record<string, number>, reset = false): Promise<void> {
   await request('POST', '/api/onboarding', { preferences: prefs, reset })
 }

@@ -66,6 +66,7 @@ from db.swipe_events import (
     days_since_last_swipe,
     get_swiped_cuisines,
     get_swipe_stats,
+    get_insights,
     delete_swipes_for_user,
     delete_impressions_for_user,
     get_all_swipes_for_user,
@@ -91,7 +92,7 @@ __all__ = [
     "update_food_item_embedding", "update_food_item_tags",
     # swipe_events
     "record_swipe", "recent_rejection_rate", "days_since_last_swipe",
-    "get_swiped_cuisines", "get_swipe_stats",
+    "get_swiped_cuisines", "get_swipe_stats", "get_insights",
     "delete_swipes_for_user", "delete_impressions_for_user", "get_all_swipes_for_user",
     # users (delete)
     "delete_user",
