@@ -1,7 +1,8 @@
 """Swipe event recording, stats aggregation, and cuisine history."""
 
-import math
 import sqlite3
+
+from taste_axes import AXIS_KEYS, mean_attr, taste_axes
 
 
 def record_swipe(
@@ -105,21 +106,15 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         hour_map[h][r["direction"]] = r["n"]
     hour_breakdown = sorted(hour_map.values(), key=lambda x: x["hour"])
 
-    # Flavor profile (average flavor axes over right-swiped dishes)
-    fp_row = conn.execute(
-        "SELECT AVG(f.spice_level) AS spicy, AVG(f.richness) AS rich, "
-        "AVG(f.savory_umami) AS umami, AVG(f.veggie_density) AS fresh, "
-        "AVG(f.sweetness) AS sweet "
-        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
-        "WHERE se.user_id = ? AND se.direction = 'right'",
-        [user_id],
-    ).fetchone()
+    # Flavor profile (mean flavor axes over right-swiped dishes) — shares the
+    # right-swipe reader + mean_attr with the Taste Axes seam, distinct scoring.
+    fp_rows = _right_swiped_attribute_rows(conn, user_id)
     flavor_profile = {
-        "Spicy": round((fp_row["spicy"] or 0.0) * 100),
-        "Rich": round((fp_row["rich"] or 0.0) * 100),
-        "Umami": round((fp_row["umami"] or 0.0) * 100),
-        "Fresh": round((fp_row["fresh"] or 0.0) * 100),
-        "Sweet": round((fp_row["sweet"] or 0.0) * 100),
+        "Spicy": round(mean_attr(fp_rows, "spice_level") * 100),
+        "Rich": round(mean_attr(fp_rows, "richness") * 100),
+        "Umami": round(mean_attr(fp_rows, "savory_umami") * 100),
+        "Fresh": round(mean_attr(fp_rows, "veggie_density") * 100),
+        "Sweet": round(mean_attr(fp_rows, "sweetness") * 100),
     }
 
     # Lifetime count from swipe_events (survives taste resets); drift from users row
@@ -138,6 +133,28 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
         "hour_breakdown": hour_breakdown,
         "flavor_profile": flavor_profile,
     }
+
+
+def _right_swiped_attribute_rows(
+    conn: sqlite3.Connection, user_id: int, before: str | None = None
+) -> list:
+    """Right-swiped item attribute rows for a user, optionally cumulative-to-date.
+
+    The single 'which swipes feed a Taste Axis' query: right swipes only,
+    joined to their food attributes. `before` (a timestamp string) bounds the
+    cumulative Drift window (se.timestamp < before)."""
+    sql = (
+        "SELECT f.spice_level, f.richness, f.dairy_content, f.sauce_heaviness, "
+        "f.texture_softness, f.savory_umami, f.veggie_density, f.sweetness, "
+        "f.cuisine_type, se.time_of_day "
+        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
+        "WHERE se.user_id = ? AND se.direction = 'right'"
+    )
+    params: list = [user_id]
+    if before is not None:
+        sql += " AND se.timestamp < ?"
+        params.append(before)
+    return conn.execute(sql, params).fetchall()
 
 
 def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
@@ -162,52 +179,8 @@ def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
             "total_right_swipes": total_right,
         }
 
-    # Scalar aggregates over right swipes
-    agg = conn.execute(
-        "SELECT AVG(f.spice_level) AS avg_spice, "
-        "AVG(f.richness) AS avg_rich, AVG(f.dairy_content) AS avg_dairy, "
-        "AVG(f.sauce_heaviness) AS avg_sauce, AVG(f.texture_softness) AS avg_texture "
-        "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
-        "WHERE se.user_id = ? AND se.direction = 'right'",
-        [user_id],
-    ).fetchone()
-
-    heat = round((agg["avg_spice"] or 0.0) * 100)
-    indulgence = round(((agg["avg_rich"] or 0.0) + (agg["avg_dairy"] or 0.0) + (agg["avg_sauce"] or 0.0)) / 3 * 100)
-    texture = round((1 - (agg["avg_texture"] or 0.0)) * 100)
-
-    # Adventure: normalized Shannon entropy of right-swiped cuisine distribution
-    cuisine_rows = conn.execute(
-        "SELECT f.cuisine_type, COUNT(*) AS n FROM swipe_events se "
-        "JOIN food_items f ON se.food_item_id = f.id "
-        "WHERE se.user_id = ? AND se.direction = 'right' GROUP BY f.cuisine_type",
-        [user_id],
-    ).fetchall()
-    cuisine_counts = [r["n"] for r in cuisine_rows]
-    n_distinct = len(cuisine_counts)
-    c_total = sum(cuisine_counts)
-    if n_distinct > 1 and c_total > 0:
-        entropy = -sum((c / c_total) * math.log(c / c_total) for c in cuisine_counts)
-        adventure = round((entropy / math.log(n_distinct)) * 100)
-    else:
-        adventure = 0
-
-    # Tempo: fraction of right swipes in [18:00, 04:00)
-    night_row = conn.execute(
-        "SELECT COUNT(*) AS n FROM swipe_events "
-        "WHERE user_id = ? AND direction = 'right' AND time_of_day IS NOT NULL "
-        "AND (time_of_day >= 18 OR time_of_day < 4)",
-        [user_id],
-    ).fetchone()
-    tempo_denom_row = conn.execute(
-        "SELECT COUNT(*) AS n FROM swipe_events "
-        "WHERE user_id = ? AND direction = 'right' AND time_of_day IS NOT NULL",
-        [user_id],
-    ).fetchone()
-    tempo_denom = tempo_denom_row["n"] if tempo_denom_row else 0
-    tempo = round((night_row["n"] / tempo_denom) * 100) if tempo_denom > 0 else 0
-
-    axes = {"Heat": heat, "Indulgence": indulgence, "Texture": texture, "Adventure": adventure, "Tempo": tempo}
+    # Current axes: one read, scored by the shared Taste Axes seam.
+    axes = taste_axes(_right_swiped_attribute_rows(conn, user_id))
 
     # Recap
     top_cuisine_row = conn.execute(
@@ -243,8 +216,7 @@ def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
     drift = None
     if len(months) >= 2:
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
-        axis_keys = ["Heat", "Indulgence", "Texture", "Adventure", "Tempo"]
-        series: dict[str, list] = {k: [] for k in axis_keys}
+        series: dict[str, list] = {k: [] for k in AXIS_KEYS}
         windows = []
 
         for ym in months:
@@ -252,58 +224,16 @@ def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
             next_mon, next_year = (1, year + 1) if mon == 12 else (mon + 1, year)
             end_date = f"{next_year}-{next_mon:02d}-01"
 
-            w_agg = conn.execute(
-                "SELECT AVG(f.spice_level) AS avg_spice, "
-                "AVG(f.richness) AS avg_rich, AVG(f.dairy_content) AS avg_dairy, "
-                "AVG(f.sauce_heaviness) AS avg_sauce, AVG(f.texture_softness) AS avg_texture "
-                "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
-                "WHERE se.user_id = ? AND se.direction = 'right' AND se.timestamp < ?",
-                [user_id, end_date],
-            ).fetchone()
-
-            w_heat = round((w_agg["avg_spice"] or 0.0) * 100)
-            w_ind = round(((w_agg["avg_rich"] or 0.0) + (w_agg["avg_dairy"] or 0.0) + (w_agg["avg_sauce"] or 0.0)) / 3 * 100)
-            w_tex = round((1 - (w_agg["avg_texture"] or 0.0)) * 100)
-
-            w_cui = conn.execute(
-                "SELECT f.cuisine_type, COUNT(*) AS n FROM swipe_events se "
-                "JOIN food_items f ON se.food_item_id = f.id "
-                "WHERE se.user_id = ? AND se.direction = 'right' AND se.timestamp < ? "
-                "GROUP BY f.cuisine_type",
-                [user_id, end_date],
-            ).fetchall()
-            w_counts = [r["n"] for r in w_cui]
-            w_total = sum(w_counts)
-            w_distinct = len(w_counts)
-            if w_distinct > 1 and w_total > 0:
-                w_entropy = -sum((c / w_total) * math.log(c / w_total) for c in w_counts)
-                w_adv = round((w_entropy / math.log(w_distinct)) * 100)
-            else:
-                w_adv = 0
-
-            w_night = conn.execute(
-                "SELECT COUNT(*) AS n FROM swipe_events "
-                "WHERE user_id = ? AND direction = 'right' AND time_of_day IS NOT NULL "
-                "AND (time_of_day >= 18 OR time_of_day < 4) AND timestamp < ?",
-                [user_id, end_date],
-            ).fetchone()
-            w_td = conn.execute(
-                "SELECT COUNT(*) AS n FROM swipe_events "
-                "WHERE user_id = ? AND direction = 'right' AND time_of_day IS NOT NULL AND timestamp < ?",
-                [user_id, end_date],
-            ).fetchone()
-            w_tempo = round((w_night["n"] / w_td["n"]) * 100) if w_td["n"] > 0 else 0
+            # Cumulative-to-date: same Taste Axes seam, bounded by end_date.
+            w_axes = taste_axes(_right_swiped_attribute_rows(conn, user_id, before=end_date))
 
             windows.append(month_names[mon - 1])
-            series["Heat"].append(w_heat)
-            series["Indulgence"].append(w_ind)
-            series["Texture"].append(w_tex)
-            series["Adventure"].append(w_adv)
-            series["Tempo"].append(w_tempo)
+            for k in AXIS_KEYS:
+                series[k].append(w_axes[k])
 
         drift = {"windows": windows, "series": series}
         if len(windows) >= 2:
-            recap["biggest_mover"] = max(axis_keys, key=lambda k: abs(series[k][-1] - series[k][0]))
+            recap["biggest_mover"] = max(AXIS_KEYS, key=lambda k: abs(series[k][-1] - series[k][0]))
 
     return {
         "axes": axes,
