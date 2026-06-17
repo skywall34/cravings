@@ -5,8 +5,6 @@ import { LockGlyph, archHex, archShift } from './Archetype'
 const ACCENT = '#E85D04'
 const TEXT_PRIMARY = '#1A1A1A'
 const TEXT_SUB = '#8A7E72'
-const FIELD_BG = '#FAF7F3'
-const FIELD_BORDER = '#EAE0D5'
 const SHEET_BG = '#FFFFFF'
 
 const PAYWALL_FEATURES = [
@@ -15,7 +13,7 @@ const PAYWALL_FEATURES = [
   { emoji: '🗓️', title: 'Monthly recap',              sub: 'A shareable "this month in your taste" card, every month.' },
 ]
 
-type Phase = 'form' | 'processing' | 'redirecting' | 'success'
+type Phase = 'idle' | 'loading' | 'redirecting' | 'success'
 
 interface PaywallSheetProps {
   open: boolean
@@ -26,17 +24,13 @@ interface PaywallSheetProps {
 }
 
 export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess }: PaywallSheetProps) {
-  const [phase, setPhase] = useState<Phase>('form')
-  const [card, setCard] = useState('')
-  const [exp, setExp] = useState('')
-  const [cvc, setCvc] = useState('')
-  const [zip, setZip] = useState('')
+  const [phase, setPhase] = useState<Phase>('idle')
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
     if (open) {
       // eslint-disable-next-line react-hooks/set-state-in-effect
-      setPhase('form'); setCard(''); setExp(''); setCvc(''); setZip('')
+      setPhase('idle')
       requestAnimationFrame(() => setMounted(true))
     } else {
       setMounted(false)
@@ -45,9 +39,8 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
 
   if (!open) return null
 
-  async function pay(e: React.FormEvent) {
-    e.preventDefault()
-    setPhase('processing')
+  async function pay() {
+    setPhase('loading')
     try {
       const result = await createCheckout()
       if (result.url) {
@@ -59,13 +52,13 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
         setTimeout(() => { onSuccess() }, 2900)
       }
     } catch {
-      setPhase('form')
+      setPhase('idle')
     }
   }
 
   return (
     <div
-      onClick={phase === 'form' ? onClose : undefined}
+      onClick={phase === 'idle' ? onClose : undefined}
       style={{
         position: 'fixed', inset: 0, zIndex: 1000,
         display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
@@ -138,54 +131,25 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
               ))}
             </div>
 
-            {/* mock card form */}
-            <form onSubmit={e => { void pay(e) }}>
-              <div style={{ fontSize: '0.7rem', fontWeight: 800, letterSpacing: '0.1em', textTransform: 'uppercase', color: TEXT_SUB, marginBottom: 8 }}>
-                Card details
-              </div>
-              <div style={{ borderRadius: 13, border: `1.5px solid ${FIELD_BORDER}`, overflow: 'hidden', background: FIELD_BG, marginBottom: 14 }}>
-                <div style={{ position: 'relative' }}>
-                  <input
-                    inputMode="numeric" placeholder="Card number" value={card}
-                    onChange={e => setCard(formatCard(e.target.value))}
-                    style={{ ...pwField, borderBottom: `1px solid ${FIELD_BORDER}` }}
-                  />
-                  <div style={{ position: 'absolute', right: 13, top: '50%', transform: 'translateY(-50%)', display: 'flex', gap: 4 }}>
-                    <CardBrandDot c1="#EB4B3C" c2="#F7A823" />
-                    <CardBrandDot c1="#1A1F71" c2="#2566AF" single />
-                  </div>
-                </div>
-                <div style={{ display: 'flex' }}>
-                  <input inputMode="numeric" placeholder="MM / YY" value={exp}
-                    onChange={e => setExp(formatExp(e.target.value))}
-                    style={{ ...pwField, borderRight: `1px solid ${FIELD_BORDER}` }} />
-                  <input inputMode="numeric" placeholder="CVC" value={cvc}
-                    onChange={e => setCvc(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                    style={{ ...pwField, borderRight: `1px solid ${FIELD_BORDER}` }} />
-                  <input inputMode="numeric" placeholder="ZIP" value={zip}
-                    onChange={e => setZip(e.target.value.replace(/\D/g, '').slice(0, 5))}
-                    style={pwField} />
-                </div>
-              </div>
-
-              <button
-                type="submit"
-                disabled={phase === 'processing' || phase === 'redirecting'}
-                style={{
-                  width: '100%', padding: '15px', border: 'none', borderRadius: 100,
-                  background: (phase === 'processing' || phase === 'redirecting') ? archShift(ACCENT, 40) : ACCENT, color: '#fff',
-                  fontSize: '1.02rem', fontWeight: 800, cursor: (phase === 'processing' || phase === 'redirecting') ? 'progress' : 'pointer',
-                  fontFamily: 'inherit', boxShadow: `0 6px 20px ${archHex(ACCENT, 0.32)}`,
-                  display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
-                }}
-              >
-                {phase === 'redirecting'
-                  ? <><Spinner /> Redirecting to Stripe…</>
-                  : phase === 'processing'
-                  ? <><Spinner /> Processing…</>
-                  : <><LockGlyph size={15} /> Pay ${price}</>}
-              </button>
-            </form>
+            {/* Stripe checkout button */}
+            <button
+              type="button"
+              onClick={() => { void pay() }}
+              disabled={phase === 'loading' || phase === 'redirecting'}
+              style={{
+                width: '100%', padding: '15px', border: 'none', borderRadius: 100,
+                background: (phase === 'loading' || phase === 'redirecting') ? archShift(ACCENT, 40) : ACCENT, color: '#fff',
+                fontSize: '1.02rem', fontWeight: 800, cursor: (phase === 'loading' || phase === 'redirecting') ? 'progress' : 'pointer',
+                fontFamily: 'inherit', boxShadow: `0 6px 20px ${archHex(ACCENT, 0.32)}`,
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
+              }}
+            >
+              {phase === 'redirecting'
+                ? <><Spinner /> Redirecting to Stripe…</>
+                : phase === 'loading'
+                ? <><Spinner /> Processing…</>
+                : <><LockGlyph size={15} /> Pay ${price} with Stripe</>}
+            </button>
 
             {/* trust row */}
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 15 }}>
@@ -195,9 +159,6 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
                 <span style={{ fontWeight: 900, color: '#635BFF', letterSpacing: '-0.01em' }}>stripe</span>
               </span>
             </div>
-            <p style={{ textAlign: 'center', margin: '12px 0 0', fontSize: '0.7rem', color: TEXT_SUB, opacity: 0.8 }}>
-              Test mode — use card 4242 4242 4242 4242
-            </p>
           </>
         )}
       </div>
@@ -227,15 +188,6 @@ function PaywallSuccess() {
   )
 }
 
-function CardBrandDot({ c1, c2, single }: { c1: string; c2: string; single?: boolean }) {
-  return (
-    <span style={{ display: 'inline-flex' }}>
-      <span style={{ width: 16, height: 11, borderRadius: 3, background: c1 }} />
-      {!single && <span style={{ width: 16, height: 11, borderRadius: 3, background: c2, marginLeft: -6 }} />}
-    </span>
-  )
-}
-
 function PremiumBadgeMini() {
   return (
     <span style={{
@@ -259,20 +211,4 @@ function Spinner() {
       display: 'inline-block', animation: 'spin 0.7s linear infinite',
     }} />
   )
-}
-
-const pwField: React.CSSProperties = {
-  flex: 1, width: '100%', minWidth: 0, padding: '14px 13px',
-  background: 'transparent', border: 'none', outline: 'none',
-  fontSize: '0.95rem', fontWeight: 600, color: TEXT_PRIMARY, fontFamily: 'inherit',
-}
-
-function formatCard(v: string): string {
-  const d = v.replace(/\D/g, '').slice(0, 16)
-  return d.replace(/(.{4})/g, '$1 ').trim()
-}
-
-function formatExp(v: string): string {
-  const d = v.replace(/\D/g, '').slice(0, 4)
-  return d.length >= 3 ? `${d.slice(0, 2)} / ${d.slice(2)}` : d
 }
