@@ -303,8 +303,8 @@ def cmd_manual(args: argparse.Namespace) -> None:
 
     ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
     ALLOWED_LICENSES = {
-        "CC0", "CC-BY", "CC-BY-2.0", "CC-BY-3.0", "CC-BY-4.0",
-        "CC-BY-SA", "CC-BY-SA-2.0", "CC-BY-SA-3.0", "CC-BY-SA-4.0",
+        "CC0", "CC-BY", "CC-BY-2.0", "CC-BY-2.5", "CC-BY-3.0", "CC-BY-4.0",
+        "CC-BY-SA", "CC-BY-SA-2.0", "CC-BY-SA-2.5", "CC-BY-SA-3.0", "CC-BY-SA-4.0",
         "PD", "Public domain",
     }
 
