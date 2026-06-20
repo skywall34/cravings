@@ -77,7 +77,7 @@ export function PaywallSheet({ open, context, price = '4.99', onClose, onSuccess
           transform: mounted ? 'translateY(0)' : 'translateY(100%)',
           transition: 'transform 0.36s cubic-bezier(0.22,1,0.36,1)',
           maxHeight: '94vh', overflowY: 'auto',
-          padding: '10px 22px 32px',
+          padding: '10px 22px calc(32px + env(safe-area-inset-bottom, 0px))',
         }}
       >
         {/* grabber */}

@@ -20,6 +20,8 @@ import { PaywallSheet } from './components/PaywallSheet'
 import { ConsentBanner } from './components/ConsentBanner'
 import { LegalPage } from './components/LegalPages'
 import { LocationConsentModal } from './components/LocationConsentModal'
+import { InstallPrompt } from './InstallPrompt'
+import { useInstall } from './useInstall'
 import './App.css'
 
 const DIETARY_KEY = 'cravings_dietary'
@@ -38,7 +40,7 @@ async function saveDietaryToStorage(prefs: GuestPrefs): Promise<void> {
   await storage.set(DIETARY_KEY, JSON.stringify(prefs))
 }
 
-function AppHeader({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout }: {
+function AppHeader({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout, isStandalone, onInstall }: {
   user: UserInfo | null
   isPremium: boolean
   onLogin: () => void
@@ -46,6 +48,8 @@ function AppHeader({ user, isPremium, onLogin, onRegister, onProfile, onInsights
   onProfile: () => void
   onInsights: () => void
   onLogout: () => void
+  isStandalone: boolean
+  onInstall: () => void
 }) {
   return (
     <header className="app-header" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -53,7 +57,7 @@ function AppHeader({ user, isPremium, onLogin, onRegister, onProfile, onInsights
         <span className="app-header-emoji">🍽️</span>
         <h1 className="app-title">Cravings</h1>
       </div>
-      <AuthMenu user={user} isPremium={isPremium} onLogin={onLogin} onRegister={onRegister} onProfile={onProfile} onInsights={onInsights} onLogout={onLogout} />
+      <AuthMenu user={user} isPremium={isPremium} onLogin={onLogin} onRegister={onRegister} onProfile={onProfile} onInsights={onInsights} onLogout={onLogout} isStandalone={isStandalone} onInstall={onInstall} />
     </header>
   )
 }
@@ -108,6 +112,9 @@ export default function App() {
   // the Guest/Registered split. App never branches on identity for recommend/swipe.
   const { rec, history: swipeHistory, count: swipeCount } = useRecommender(currentUser, guestDietary)
 
+  const install = useInstall()
+  const [consentDismissed, setConsentDismissed] = useState(false)
+
   const { requestLocation } = useLocation()
   const { needsConsent, gate, allow, deny } = useLocationConsent()
 
@@ -128,6 +135,29 @@ export default function App() {
       setCurrentUser(null)
       setScreen('onboarding')
     })
+  }, [])
+
+  useEffect(() => {
+    // If consent was already given in a prior session, gate the install prompt immediately.
+    void storage.get('cravings_consent').then(v => { if (v) setConsentDismissed(true) })
+  }, [])
+
+  useEffect(() => {
+    // Refetch user on resume from background so webhook-granted premium reflects.
+    async function onVisible() {
+      const token = await getToken()
+      if (!token) return
+      const me = await getMe()
+      setCurrentUser(me)
+    }
+    const onVisibilityChange = () => { if (document.visibilityState === 'visible') void onVisible() }
+    const onFocus = () => void onVisible()
+    document.addEventListener('visibilitychange', onVisibilityChange)
+    window.addEventListener('focus', onFocus)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisibilityChange)
+      window.removeEventListener('focus', onFocus)
+    }
   }, [])
 
   useEffect(() => {
@@ -320,6 +350,11 @@ export default function App() {
     onProfile: () => navigateTo('profile'),
     onInsights: () => navigateTo('insights'),
     onLogout: () => void handleLogout(),
+    isStandalone: install.isStandalone,
+    onInstall: () => {
+      if (install.bucket === 'event') install.promptInstall()
+      else install.forceShow()
+    },
   }
 
   function openLegal(doc: 'privacy' | 'terms') {
@@ -330,7 +365,8 @@ export default function App() {
   return (
     <div className="app">
       <AppHeader {...authMenuProps} />
-      <ConsentBanner onOpenPrivacy={() => openLegal('privacy')} />
+      <ConsentBanner onOpenPrivacy={() => openLegal('privacy')} onDismiss={() => setConsentDismissed(true)} />
+      <InstallPrompt {...install} gated={consentDismissed && screen !== 'onboarding'} />
 
       {screen === 'login' && (
         <LoginForm

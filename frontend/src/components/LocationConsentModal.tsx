@@ -13,7 +13,7 @@ export function LocationConsentModal({ open, onAllow, onDeny, onOpenPrivacy }: L
     <div style={{
       position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)',
       display: 'flex', alignItems: 'flex-end', justifyContent: 'center',
-      zIndex: 8000, padding: '0 12px 24px',
+      zIndex: 8000, padding: '0 12px calc(24px + env(safe-area-inset-bottom, 0px))',
     }}>
       <div style={{
         width: '100%', maxWidth: 480, background: '#fff',

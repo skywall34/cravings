@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 interface ImportMetaEnv {
   // Set only in the Capacitor build (.env.capacitor). Absolute prod API base.

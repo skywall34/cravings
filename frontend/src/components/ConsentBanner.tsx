@@ -5,9 +5,10 @@ const CONSENT_KEY = 'cravings_consent'
 
 interface ConsentBannerProps {
   onOpenPrivacy: () => void
+  onDismiss?: () => void
 }
 
-export function ConsentBanner({ onOpenPrivacy }: ConsentBannerProps) {
+export function ConsentBanner({ onOpenPrivacy, onDismiss }: ConsentBannerProps) {
   const [visible, setVisible] = useState(false)
 
   useEffect(() => {
@@ -23,6 +24,7 @@ export function ConsentBanner({ onOpenPrivacy }: ConsentBannerProps) {
   function decide(choice: 'all' | 'essential') {
     void storage.set(CONSENT_KEY, choice)
     setVisible(false)
+    onDismiss?.()
   }
 
   if (!visible) return null
@@ -33,7 +35,7 @@ export function ConsentBanner({ onOpenPrivacy }: ConsentBannerProps) {
       left: 0, right: 0, bottom: 0,
       display: 'flex',
       justifyContent: 'center',
-      padding: '0 12px 12px',
+      padding: '0 12px calc(12px + env(safe-area-inset-bottom, 0px))',
       zIndex: 9000,
       pointerEvents: 'none',
     }}>

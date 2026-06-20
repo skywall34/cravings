@@ -9,9 +9,11 @@ interface AuthMenuProps {
   onProfile: () => void
   onInsights: () => void
   onLogout: () => void
+  isStandalone: boolean
+  onInstall: () => void
 }
 
-export function AuthMenu({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout }: AuthMenuProps) {
+export function AuthMenu({ user, isPremium, onLogin, onRegister, onProfile, onInsights, onLogout, isStandalone, onInstall }: AuthMenuProps) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -73,12 +75,18 @@ export function AuthMenu({ user, isPremium, onLogin, onRegister, onProfile, onIn
                   }
                 </span>
               </MenuItem>
+              {!isStandalone && (
+                <MenuItem onClick={() => { setOpen(false); onInstall() }}>Install app</MenuItem>
+              )}
               <MenuItem onClick={() => { setOpen(false); onLogout() }} danger>Log out</MenuItem>
             </>
           ) : (
             <>
               <MenuItem onClick={() => { setOpen(false); onLogin() }}>Log in</MenuItem>
               <MenuItem onClick={() => { setOpen(false); onRegister() }}>Register</MenuItem>
+              {!isStandalone && (
+                <MenuItem onClick={() => { setOpen(false); onInstall() }}>Install app</MenuItem>
+              )}
             </>
           )}
         </div>
