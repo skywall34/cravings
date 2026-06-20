@@ -1,11 +1,19 @@
 # Android Migration — Capacitor Wrap
 
+> **DEPRECATED (2026-06-20) — Legacy reference only.**
+> PWA is now the primary mobile delivery channel for both iOS and Android (ADR-0016, P32).
+> The Capacitor `android/` code and `build:android` script remain in the repo but are no longer
+> maintained or shipped. This document is preserved for historical reference and in case the
+> Capacitor build ever needs to be revived. See `docs/internal/adr/0016-pwa-primary-mobile-delivery.md`.
+
+---
+
 **Status (2026-06-13): code + scaffold complete, debug APK built. CORS preflight
 verified ✅ (both `https://localhost` and `capacitor://localhost` origins pass).
 On-device emulator session verified ✅ (2026-06-13 — items A/B/D/G confirmed via
 Medium_Phone_API_36.1 AVD; see checklist below). Remaining: signed release build (Phase 4).**
 
-See `docs/adr/0006-android-capacitor-bundled-wrap.md` for the decision record.
+See `docs/internal/adr/0006-android-capacitor-bundled-wrap.md` for the decision record.
 
 ## Context
 

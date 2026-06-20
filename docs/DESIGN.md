@@ -6,6 +6,8 @@ Cravings is a swipe-based food discovery app. Users swipe right on foods they wa
 
 **Guest mode**: guests have no server-side account. State (session id, dietary prefs, taste prefs, in-session seen items) lives in localStorage. When taste prefs are provided via onboarding sliders, a session-scoped Thompson model is seeded and updated on each swipe — same recommendation quality as registered users within a session, just without cross-session memory. Falls back to global popularity ranking when no prefs provided. Registration creates a fresh server-side account with persistent Thompson Sampling. See [ADR-0005](./adr/0005-stateless-guest-no-db-row.md).
 
+**Mobile delivery (PWA)**: Cravings is an installable PWA — the primary mobile channel for both iOS and Android (ADR-0016, P32). Users add it to their home screen from the browser; it launches full-screen in standalone mode. Android Chrome shows a real install button (`beforeinstallprompt`); iOS Safari shows a coaching overlay (Share → Add to Home Screen). No App Store or Play Store required. The Capacitor `android/` build is retained as legacy but not maintained. See `useInstall.ts` + `InstallPrompt.tsx` for the install UI.
+
 ---
 
 ## Core User Flow
