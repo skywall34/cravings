@@ -25,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 load_dotenv()
 
 import db.database as db
+import db.metrics as metrics
 import swipe
 from model_server.model_service import UserModelStore
 from model_server.recommendation_service import ModelServer
@@ -611,6 +612,43 @@ async def admin_batch(body: dict):
         "food_items_inserted": len(item_ids),
         "tagging": "queued",
     }
+
+
+# ---------------------------------------------------------------------------
+# Admin metrics (cross-user aggregates) — shared-token gated, JSON only (no UI).
+# Registered users only; "active" = swiped (see db.metrics for caveats).
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/admin/metrics/foods", dependencies=[Depends(_require_admin)])
+async def admin_metrics_foods(
+    min_swipes: int = Query(5, ge=1),
+    limit: int = Query(20, ge=1, le=200),
+    cuisine: str | None = Query(None),
+    conn=Depends(_get_conn),
+):
+    return metrics.food_performance(conn, min_swipes=min_swipes, limit=limit, cuisine=cuisine)
+
+
+@app.get("/api/admin/metrics/catalog", dependencies=[Depends(_require_admin)])
+async def admin_metrics_catalog(conn=Depends(_get_conn)):
+    return metrics.catalog_trends(conn)
+
+
+@app.get("/api/admin/metrics/retention", dependencies=[Depends(_require_admin)])
+async def admin_metrics_retention(
+    days: int = Query(30, ge=1, le=365),
+    conn=Depends(_get_conn),
+):
+    return metrics.retention(conn, days=days)
+
+
+@app.get("/api/admin/metrics/engagement", dependencies=[Depends(_require_admin)])
+async def admin_metrics_engagement(
+    days: int = Query(30, ge=1, le=365),
+    conn=Depends(_get_conn),
+):
+    return metrics.engagement(conn, days=days)
 
 
 # ---------------------------------------------------------------------------
