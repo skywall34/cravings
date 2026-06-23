@@ -1,6 +1,7 @@
 """FastAPI entry point — single-process replacement for the Go + gRPC split."""
 
 import asyncio
+import hmac
 import logging
 import mimetypes
 import os
@@ -60,11 +61,12 @@ _sessions: swipe.SessionStore = swipe.SessionStore()
 _session_max_swipes: int = int(os.environ.get("CRAVINGS_SESSION_MAX_SWIPES", "10"))
 _images_root: Path = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
 _nearby_limiter: RateLimiter = RateLimiter(capacity=10, refill_seconds=30.0)
+_auth_limiter: RateLimiter = RateLimiter(capacity=5, refill_seconds=60.0)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db_path, _model_service, _places, _sessions, _images_root, _nearby_limiter, _payment_provider
+    global _db_path, _model_service, _places, _sessions, _images_root, _nearby_limiter, _auth_limiter, _payment_provider
     _db_path = Path(os.environ.get("CRAVINGS_DB", "cravings.db"))
     _images_root = Path(os.environ.get("CRAVINGS_IMAGES_ROOT", "./images"))
     db.init_db(_db_path)
@@ -77,6 +79,10 @@ async def lifespan(app: FastAPI):
     _nearby_limiter = RateLimiter(
         capacity=int(os.environ.get("CRAVINGS_NEARBY_BURST", "10")),
         refill_seconds=float(os.environ.get("CRAVINGS_NEARBY_REFILL_SECONDS", "30")),
+    )
+    _auth_limiter = RateLimiter(
+        capacity=int(os.environ.get("CRAVINGS_AUTH_BURST", "5")),
+        refill_seconds=float(os.environ.get("CRAVINGS_AUTH_REFILL_SECONDS", "60")),
     )
     _payment_provider = make_payment_provider()
 
@@ -124,6 +130,35 @@ async def _image_cache_headers(request: Request, call_next):
     # (e.g. /cravings/images/...) since the proxy forwards the full path.
     if "/images/" in request.url.path:
         response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return response
+
+
+# Baseline HTTP security headers on every response. CSP is enforcing but pragmatic:
+# 'unsafe-inline' style is required (heavy inline style={{}} in the React SPA) and
+# Google Fonts is allowlisted. Stripe needs no exception — checkout is a full-page
+# redirect, not an iframe. Permissions-Policy keeps geolocation (used by the app).
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self'; "
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+    "font-src 'self' https://fonts.gstatic.com; "
+    "img-src 'self' data: https:; "
+    "connect-src 'self'; "
+    "frame-ancestors 'none'; "
+    "base-uri 'self'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    response: Response = await call_next(request)
+    response.headers["Content-Security-Policy"] = _CSP
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "geolocation=(self), camera=(), microphone=()"
     return response
 
 
@@ -373,8 +408,36 @@ async def nearby(
 # Auth routes
 # ---------------------------------------------------------------------------
 
+def _client_ip(request: Request) -> str:
+    """Caller IP for rate-limit keying.
+
+    Behind one trusted proxy (Traefik), the genuine peer IP is the RIGHTMOST
+    X-Forwarded-For entry — the one Traefik appends. The leftmost entries are
+    client-supplied and spoofable, so trusting them would let an attacker rotate
+    the value to bypass the limit.
+    """
+    xff = request.headers.get("x-forwarded-for")
+    if xff:
+        return xff.split(",")[-1].strip()
+    return request.client.host if request.client else "unknown"
+
+
+async def _auth_throttle(key: str) -> None:
+    """Raise 429 if the auth bucket for `key` is empty. Mirrors the nearby handler."""
+    allowed, retry_after = await _auth_limiter.consume(key)
+    if not allowed:
+        retry_int = max(1, int(retry_after))
+        logger.warning("auth rate limited key=%s retry_after=%s", key, retry_int)
+        raise HTTPException(
+            status_code=429,
+            detail={"detail": "too many attempts, try again later", "retry_after": retry_int},
+            headers={"Retry-After": str(retry_int)},
+        )
+
+
 @app.post("/api/auth/register", status_code=201, response_model=AuthResultOut)
-async def auth_register(body: RegisterBody, conn=Depends(_get_conn)):
+async def auth_register(body: RegisterBody, request: Request, conn=Depends(_get_conn)):
+    await _auth_throttle(f"register|ip:{_client_ip(request)}")
     # email/password/name already normalized + validated by RegisterBody.
     existing = db.get_user_by_email(conn, body.email)
     if existing:
@@ -390,7 +453,10 @@ async def auth_register(body: RegisterBody, conn=Depends(_get_conn)):
 
 
 @app.post("/api/auth/login", response_model=AuthResultOut)
-async def auth_login(body: LoginBody, conn=Depends(_get_conn)):
+async def auth_login(body: LoginBody, request: Request, conn=Depends(_get_conn)):
+    # Throttle before the password check so guesses are rate-limited. Fold in the
+    # email so per-account spray is bounded and one IP can't lock out all accounts.
+    await _auth_throttle(f"login|ip:{_client_ip(request)}|email:{body.email}")
     user = db.get_user_by_email(conn, body.email)
     if not user or not user["password_hash"] or not db.verify_password(body.password.strip(), user["password_hash"]):
         await asyncio.sleep(0.25)
@@ -507,7 +573,7 @@ async def _tag_items_background(item_ids: list[int]) -> None:
 
 def _require_admin(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
     admin_token = os.environ.get("CRAVINGS_ADMIN_TOKEN", "")
-    if not admin_token or credentials.credentials != admin_token:
+    if not admin_token or not hmac.compare_digest(credentials.credentials, admin_token):
         raise HTTPException(status_code=403, detail="forbidden")
 
 

@@ -322,6 +322,7 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 | P32 | PWA primary mobile delivery (Jun 2026): `vite-plugin-pwa` (Workbox, autoUpdate, installable shell only). 3-bucket install UI: Android `beforeinstallprompt` → real Install button; iOS Safari → coaching overlay; other → AuthMenu hint. `useInstall.ts` hook + `InstallPrompt.tsx`. ConsentBanner + onboarding gate. Permanent dismiss via storage seam (`cravings_install_dismissed`). Safe-area insets (`viewport-fit=cover`, `env(safe-area-inset-*)` on `.app`, ConsentBanner, PaywallSheet, LocationConsentModal). Stripe-resume: `visibilitychange`/`focus` refetch `getMe()`. Apple meta tags + `apple-touch-icon.png` (180). Maskable icon (`icon-512-maskable.png`). ADR-0016; ADR-0006 superseded. Deployed to themshin.com/cravings (2026-06-20). Stripe sandbox verified end-to-end: checkout → webhook → `is_premium=1` confirmed in DB. | ✅ Complete + Deployed |
 | P31 | Real Insights data (Jun 2026): replaced `MOCK_AXES`/`MOCK_DRIFT` with live backend data. New `get_insights(conn, user_id)` in `db/swipe_events.py` — attribute-averaging over right swipes for 5 Taste Axes (Heat/Indulgence/Texture/Adventure/Tempo), cumulative drift across last 4 calendar months, recap stats (`top_cuisine`, `top_cuisines` ordered list, `say_yes_rate`, `biggest_mover`), thin-data gate (≥20 right swipes = `ready: true`). New `GET /api/insights` (premium-gated server-side, 403 for non-premium/guests). Frontend: `fetchInsights()` + `InsightsData` interface in `api.ts`; `InsightsScreen` fetches on mount (premium only), passes real axes/drift/recap to sub-components; progress gate when `ready=false`; drift sections hidden when no multi-month data. Drift chips are axis-aware: Heat/Indulgence/Texture show "+X ↑ since [month]"; Tempo shows plain-English night fraction ("mostly nights" / "67% at night" / "mostly daytime"); Adventure shows top cuisines by name ("Japanese · Italian +3") + total count. Monthly recap month label uses `new Date()` (not hardcoded). "Share my recap" button uses Web Share API (`navigator.share`) — opens native OS share sheet on Android; hidden on platforms that don't support it. Removed `MOCK_AXES`/`MOCK_DRIFT` from `Archetype.tsx`; `deriveArchetypeAt` now accepts `series` param; `ProfilePage` uses balanced fallback axes. 21 new tests (`tests/test_insights.py`). 373 tests pass. | ✅ Complete |
 | P28 | Remove mood + session dietary_mode (Jun 2026, ADR-0013): deleted the swipe-screen `MoodSelector` (mood + dietary_mode pills) — swipe screen is now progress + card + footer. Both dropped from the model: `encode_context` loses the two one-hots (`CONTEXT_DIM 12→4`, `TOTAL_DIM 62→54`), `INTERACTION_TERMS` keeps only `temperature×time`. `Snapshot`/intake/recommend-swipe seam/`/api/recommend` query no longer carry them; `swipe_events.mood`/`dietary_mode` are deprecated nullable tombstones; `mood_breakdown` + `MoodDonut` removed (persona "adventurous vs cozy" axis re-derived from cuisine variety). Diet is now solely the mandatory onboarding restrictions hard-filter. One-time model reset via the existing self-heal dim guard (verified live: `user_id 1 dim=52→54 reset`, 200 OK). Accuracy held: guest 83.0%/+34.7pp, registered 87.3%/+34.1pp (30×50 sweep). Android debug APK rebuilt OK. 334 tests + 2 slow SLAs pass. | ✅ Complete |
+| P33 | Security hardening (Jun 2026): security review (headers + OWASP). Audit found injection clean (parameterized SQL + Pydantic whitelists), no IDOR, secrets gitignored/never committed. Fixed the real gaps: (1) `_security_headers` middleware on every response — enforcing pragmatic CSP (`default-src 'self'`, Google Fonts allowlisted, `style-src 'unsafe-inline'` for React inline styles, no Stripe exception since checkout is a redirect), HSTS, `X-Frame-Options: DENY`, `nosniff`, `Referrer-Policy`, `Permissions-Policy` (keeps `geolocation=(self)`). (2) Brute-force rate-limit on `/api/auth/login`+`/register` via the existing `RateLimiter` (`_auth_limiter`, `CRAVINGS_AUTH_BURST`=5/`CRAVINGS_AUTH_REFILL_SECONDS`=60); login keyed by `ip+email`, register by `ip`; 429 + `Retry-After`. IP from **rightmost** `X-Forwarded-For` (the entry Traefik appends — leftmost is client-spoofable). (3) Admin token compare → `hmac.compare_digest`. Deferred: token expiry, token-at-rest hashing, password reset. New `tests/test_security_headers.py` (2) + 3 auth-limit tests; 392 tests pass (2 slow deselected). | ✅ Complete |
 
 ## Next Steps (for next session)
 
@@ -329,10 +330,14 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 - PWA live at `https://themshin.com/cravings` — installable on Android + iOS.
 - Stripe sandbox deployed and verified: checkout → webhook → `is_premium=1` confirmed in DB.
 - Stripe is on **sandbox** (`sk_test_...`). Go live when ready by swapping to live keys (see `docs/internal/STRIPE_VPS_DEPLOY.md`).
+- Image quality fix shipped + deployed (2026-06-20): 37 `judge_failures.csv` items resolved (18 replaced, 16 kept, 3 placeholder). New images serve on prod; orphans removed via rsync `--delete`. See `docs/internal/PLAN_P12_FOOD_IMAGES.md`.
 
 **Remaining open work (priority order):**
 - **Session-end archetype upsell**: add locked-archetype teaser to `SessionSummary` (show emoji + blurred name, CTA → opens PaywallSheet with context `'session'`). High conversion leverage.
 - **Stripe go-live**: swap `STRIPE_SECRET_KEY=sk_live_...`, `STRIPE_PUBLISHABLE_KEY=pk_live_...`, `STRIPE_WEBHOOK_SECRET=whsec_live_...` (dashboard endpoint secret, not `stripe listen`) on VPS → restart container. See `docs/internal/STRIPE_VPS_DEPLOY.md`.
+- **Fix `judge_images.py` dry-run bug**: `_append_failure` runs even under `--dry-run` (call sits outside the dry-run guard, ~line 78) — that's what produced the misleading `judge_failures.csv` (DB said `pass`/`auto` while the CSV said `fail`). Move it inside the guard so a dry run writes nothing.
+- **Full-catalog image re-audit**: only the 37 CSV items were vetted this round; the rest of the ~924 imaged items are still on gemma's `auto` verdict. Re-audit with the Claude-curator flow (`scripts/curator_worklist.py` + curator agent) to catch other wrong photos. Consider promoting the curator agent into a repeatable script, or upgrading the local VLM judge off `gemma4:e2b` (too weak — it re-passed several wrong images this round).
+- **3 unfindable dishes** (Beso 886, Bánh Đập 940, Kinche 997): currently cuisine-placeholder. If a CC/PD photo ever surfaces, hand-curate via `images/manual/` + `--manual`.
 - **Insights follow-ups** (deferred from P31): stated-vs-revealed axis (onboarding `taste_prefs` vs revealed swipe averages); population-percentile normalization; μ-projection axes; nightly axis-score snapshot job.
 - **"Not today" vs "never" swipe**: 3-way left (`never` = permanent per-item exclude + `reward=0.0`). `SwipeDirection` already has `'never'` in `api.ts` — check how far it's wired before planning.
 - **Interaction terms re-eval**: `CRAVINGS_USE_INTERACTIONS=1` once 200+ real user swipes exist.
@@ -445,8 +450,11 @@ cravings/
 │   ├── recorder.py             # record_swipe(): full Right-Swipe / Left-Swipe contract; reward_for_direction() (shared reward policy)
 │   └── intake.py               # build_intake()/build_guest_intake(): snapshot + filtering; shape_results() + add_image_urls()
 ├── recommender.py              # Recommender seam: Guest/RegisteredRecommender adapters + make_recommender() factory (identity resolved once; routes are thin transport)
-├── main.py                     # FastAPI app: routes, lifespan, auth dep, Places proxy, StaticFiles SPA mount
-├── rate_limit.py               # Generic per-key token-bucket limiter (asyncio.Lock, injectable clock, lazy sweep)
+├── main.py                     # FastAPI app: routes, lifespan, auth dep, Places proxy, StaticFiles SPA mount;
+│                               #   _security_headers middleware (CSP/HSTS/X-Frame/nosniff/Referrer/Permissions);
+│                               #   auth rate-limit (_auth_limiter) on login+register; constant-time admin compare
+├── rate_limit.py               # Generic per-key token-bucket limiter (asyncio.Lock, injectable clock, lazy sweep).
+│                               #   Used by /api/nearby and /api/auth (login+register brute-force protection)
 ├── Dockerfile                  # Multi-stage: node builds frontend/dist, python runtime serves both
 ├── docker_build.sh             # Build + push to ghcr.io/skywall34/cravings:prod
 ├── .dockerignore
@@ -578,6 +586,8 @@ uv run python main.py --db cravings.db --maps-api-key YOUR_KEY
 #   CRAVINGS_IMAGES_ROOT=./images     — filesystem root for food+cuisine WebP images (default ./images)
 #   CRAVINGS_NEARBY_BURST=10          — /api/nearby token bucket capacity per user (default 10)
 #   CRAVINGS_NEARBY_REFILL_SECONDS=30 — seconds to refill 1 token (default 30 → 120/hr sustained per user)
+#   CRAVINGS_AUTH_BURST=5             — /api/auth login+register attempts before 429 (default 5)
+#   CRAVINGS_AUTH_REFILL_SECONDS=60   — seconds to refill 1 auth token (default 60)
 
 # ── Frontend ─────────────────────────────────────────────────────────────────
 
@@ -793,10 +803,3 @@ Default canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-age
 ### Domain docs
 
 Single-context: `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
-
-### Rerun Claude
-
-Read the attached cravings.zip and the README inside.
-Implement: the designs in this project
-
-claude --resume c78e9cc6-83e1-4a7c-b691-6a0071b917cf

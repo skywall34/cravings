@@ -457,3 +457,60 @@ async def test_no_location_columns_in_schema(client):
         assert "latitude" not in cols, f"table {table!r} has latitude column"
         assert "longitude" not in cols, f"table {table!r} has longitude column"
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Auth rate limiting (brute-force protection)
+# ---------------------------------------------------------------------------
+
+async def test_login_rate_limited(client):
+    """Repeated login attempts on one email get 429 once the burst is spent."""
+    main._auth_limiter.reset()
+    await client.post("/api/auth/register", json={
+        "email": "rl@example.com", "password": "password123", "name": "RL",
+    })
+    body = {"email": "rl@example.com", "password": "wrongpassword"}
+    # capacity default 5 → first 5 attempts reach the password check (401), 6th throttled.
+    for _ in range(5):
+        r = await client.post("/api/auth/login", json=body)
+        assert r.status_code == 401
+    blocked = await client.post("/api/auth/login", json=body)
+    assert blocked.status_code == 429
+    assert "Retry-After" in blocked.headers
+    assert blocked.json()["detail"]["retry_after"] >= 1
+
+
+async def test_register_rate_limited(client):
+    """Bursting registrations from one IP gets 429 past the burst."""
+    main._auth_limiter.reset()
+    for i in range(5):
+        r = await client.post("/api/auth/register", json={
+            "email": f"burst{i}@example.com", "password": "password123", "name": "B",
+        })
+        assert r.status_code == 201
+    blocked = await client.post("/api/auth/register", json={
+        "email": "burst-over@example.com", "password": "password123", "name": "B",
+    })
+    assert blocked.status_code == 429
+    assert "Retry-After" in blocked.headers
+
+
+async def test_rate_limit_ignores_spoofed_xff(client):
+    """Rotating the client-supplied (leftmost) XFF entry must not bypass the limit.
+
+    Traefik appends the real peer IP on the right; we key on that. A spoofed
+    leftmost value changes each request but the trusted rightmost stays fixed.
+    """
+    main._auth_limiter.reset()
+    body = {"email": "spoof@example.com", "password": "wrongpassword"}
+    statuses = []
+    for i in range(6):
+        r = await client.post(
+            "/api/auth/login",
+            json=body,
+            headers={"X-Forwarded-For": f"10.0.0.{i}, 203.0.113.7"},
+        )
+        statuses.append(r.status_code)
+    # Despite a fresh leftmost IP each call, the fixed rightmost IP shares one
+    # bucket → still throttled after the burst.
+    assert 429 in statuses
