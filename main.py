@@ -578,6 +578,12 @@ def _require_admin(credentials: HTTPAuthorizationCredentials = Depends(_bearer))
         raise HTTPException(status_code=403, detail="forbidden")
 
 
+def _require_admin_user(user=Depends(_get_user)):
+    if not is_admin_email(user["email"]):
+        raise HTTPException(status_code=403, detail="forbidden")
+    return user
+
+
 @app.post("/api/admin/batch", status_code=202, dependencies=[Depends(_require_admin)])
 async def admin_batch(body: dict):
     """Insert restaurants + food items and queue async LLM tagging.
@@ -615,12 +621,12 @@ async def admin_batch(body: dict):
 
 
 # ---------------------------------------------------------------------------
-# Admin metrics (cross-user aggregates) — shared-token gated, JSON only (no UI).
+# Admin metrics (cross-user aggregates) — admin-user gated (is_admin), JSON only (no UI).
 # Registered users only; "active" = swiped (see db.metrics for caveats).
 # ---------------------------------------------------------------------------
 
 
-@app.get("/api/admin/metrics/foods", dependencies=[Depends(_require_admin)])
+@app.get("/api/admin/metrics/foods", dependencies=[Depends(_require_admin_user)])
 async def admin_metrics_foods(
     min_swipes: int = Query(5, ge=1),
     limit: int = Query(20, ge=1, le=200),
@@ -630,12 +636,12 @@ async def admin_metrics_foods(
     return metrics.food_performance(conn, min_swipes=min_swipes, limit=limit, cuisine=cuisine)
 
 
-@app.get("/api/admin/metrics/catalog", dependencies=[Depends(_require_admin)])
+@app.get("/api/admin/metrics/catalog", dependencies=[Depends(_require_admin_user)])
 async def admin_metrics_catalog(conn=Depends(_get_conn)):
     return metrics.catalog_trends(conn)
 
 
-@app.get("/api/admin/metrics/retention", dependencies=[Depends(_require_admin)])
+@app.get("/api/admin/metrics/retention", dependencies=[Depends(_require_admin_user)])
 async def admin_metrics_retention(
     days: int = Query(30, ge=1, le=365),
     conn=Depends(_get_conn),
@@ -643,7 +649,7 @@ async def admin_metrics_retention(
     return metrics.retention(conn, days=days)
 
 
-@app.get("/api/admin/metrics/engagement", dependencies=[Depends(_require_admin)])
+@app.get("/api/admin/metrics/engagement", dependencies=[Depends(_require_admin_user)])
 async def admin_metrics_engagement(
     days: int = Query(30, ge=1, le=365),
     conn=Depends(_get_conn),

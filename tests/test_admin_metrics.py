@@ -1,4 +1,4 @@
-"""Tests for /api/admin/metrics/* — cross-user aggregates + shared-token gate."""
+"""Tests for /api/admin/metrics/* — cross-user aggregates + is_admin gate."""
 
 import os
 import sqlite3
@@ -14,6 +14,7 @@ TEST_DB = _tmp.name
 ADMIN_TOKEN = "test-admin-token-metrics"
 os.environ["CRAVINGS_DB"] = TEST_DB
 os.environ["CRAVINGS_ADMIN_TOKEN"] = ADMIN_TOKEN
+os.environ["CRAVINGS_ADMIN_EMAILS"] = "admin@x.com"
 os.environ.setdefault("CRAVINGS_BILLING_WEBHOOK_SECRET", "test-secret-metrics")
 os.environ.pop("CRAVINGS_BILLING_PROVIDER", None)
 
@@ -93,16 +94,22 @@ async def test_metrics_requires_token(client):
         assert resp.status_code in (401, 403)
 
 
-async def test_metrics_rejects_wrong_token(client):
+async def test_metrics_rejects_non_admin(client):
+    conn = _conn()
+    _user(conn, 1, email="u@x.com")
+    conn.close()
     resp = await client.get(
-        "/api/admin/metrics/foods", headers={"Authorization": "Bearer wrong"}
+        "/api/admin/metrics/foods", headers={"Authorization": "Bearer tok1"}
     )
     assert resp.status_code == 403
 
 
-async def test_metrics_accepts_admin_token(client):
+async def test_metrics_accepts_admin_user(client):
+    conn = _conn()
+    _user(conn, 2, email="admin@x.com")
+    conn.close()
     resp = await client.get(
-        "/api/admin/metrics/foods", headers={"Authorization": f"Bearer {ADMIN_TOKEN}"}
+        "/api/admin/metrics/foods", headers={"Authorization": "Bearer tok2"}
     )
     assert resp.status_code == 200
 

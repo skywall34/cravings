@@ -324,6 +324,59 @@ export async function deleteAccount(): Promise<void> {
   return request('DELETE', '/api/users/me')
 }
 
+// ---------------------------------------------------------------------------
+// Admin metrics types + API calls
+// ---------------------------------------------------------------------------
+
+export interface AdminFoodMetric {
+  food_id: number; name: string; cuisine_type: string; restaurant: string | null
+  right: number; left: number; never: number; total: number; right_rate: number; impressions: number
+}
+export interface AdminFoodsMetrics { min_swipes: number; food_count: number; best: AdminFoodMetric[]; worst: AdminFoodMetric[] }
+export interface AdminDim { key: string; right: number; total: number; right_rate: number }
+export interface AdminCatalogMetrics {
+  by_cuisine: AdminDim[]; by_protein: AdminDim[]; by_carb: AdminDim[]
+  right_swipe_attributes: Record<string, number>
+}
+export interface AdminRetentionMetrics {
+  active_definition: string; population: string; dau: number; wau: number; mau: number
+  signups: { day: string; n: number }[]
+  cohort_retention: { D1: number; D7: number; D30: number }
+  cohort_eligible: { D1: number; D7: number; D30: number }
+}
+export interface AdminEngagementMetrics {
+  total_swipes: number; global_say_yes_rate: number
+  swipes_per_day: { day: string; n: number; right: number; say_yes_rate: number }[]
+  swipes_per_user_histogram: { bucket: string; users: number }[]
+  active_users_with_swipes: number; registered_users: number; premium_users: number; premium_conversions_recent: number
+}
+
+function qs(p?: Record<string, string | number | undefined>): string {
+  if (!p) return ''
+  const params = new URLSearchParams()
+  for (const [k, v] of Object.entries(p)) {
+    if (v !== undefined) params.set(k, String(v))
+  }
+  const s = params.toString()
+  return s ? `?${s}` : ''
+}
+
+export async function getAdminFoods(p?: { min_swipes?: number; limit?: number; cuisine?: string }): Promise<AdminFoodsMetrics> {
+  return request<AdminFoodsMetrics>('GET', `/api/admin/metrics/foods${qs(p)}`)
+}
+
+export async function getAdminCatalog(): Promise<AdminCatalogMetrics> {
+  return request<AdminCatalogMetrics>('GET', '/api/admin/metrics/catalog')
+}
+
+export async function getAdminRetention(days = 30): Promise<AdminRetentionMetrics> {
+  return request<AdminRetentionMetrics>('GET', `/api/admin/metrics/retention?days=${days}`)
+}
+
+export async function getAdminEngagement(days = 30): Promise<AdminEngagementMetrics> {
+  return request<AdminEngagementMetrics>('GET', `/api/admin/metrics/engagement?days=${days}`)
+}
+
 export async function exportData(): Promise<Blob> {
   const res = await fetch(`${apiBase()}/api/users/me/export`, {
     headers: await authHeaders(),
