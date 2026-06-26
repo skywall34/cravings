@@ -573,6 +573,16 @@ uv run python main.py --db cravings.db --maps-api-key YOUR_KEY
 #   CRAVINGS_BILLING_CANCEL_URL=...        — optional override; defaults to /?checkout=cancel
 #   CRAVINGS_ADMIN_EMAILS=you@email.com    — csv of admin emails (bypass premium, no payment needed)
 #
+# Email verification (signup OTP — email_service.py):
+#   SMTP_HOST=smtp.gmail.com               — REQUIRED in prod (BASE_PATH set) or boot fails fast;
+#                                            unset in local dev → ConsoleSender prints code to stderr
+#   SMTP_PORT=587                          — 587=STARTTLS (default), 465=implicit TLS (auto), 2525=alt
+#   SMTP_USER=...                          — Gmail: full address; SendGrid: literally "apikey"
+#   SMTP_PASS=...                          — Gmail: 16-char App Password (not account password)
+#   SMTP_FROM=Cravings <no-reply@dom>      — Gmail: must equal SMTP_USER; need SPF/DKIM or → spam
+#   SMTP_STARTTLS=1                        — STARTTLS for 587 (default); SMTP_SSL=1 forces 465-style TLS
+#   CRAVINGS_ENV=dev                       — allow the console-code fallback even when BASE_PATH is set
+#
 # Stripe sandbox dev loop:
 #   1. Set CRAVINGS_BILLING_PROVIDER=stripe in .env (or env)
 #   2. In a separate terminal: stripe listen --forward-to http://localhost:8000/cravings/api/billing/webhook
