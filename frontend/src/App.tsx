@@ -14,6 +14,7 @@ import { SessionSummary } from './components/SessionSummary'
 import { AuthMenu } from './components/AuthMenu'
 import { LoginForm } from './components/LoginForm'
 import { RegisterForm } from './components/RegisterForm'
+import { EmailVerification } from './components/EmailVerification'
 import { ProfilePage } from './components/ProfilePage'
 import { InsightsScreen } from './components/Insights'
 import { PaywallSheet } from './components/PaywallSheet'
@@ -88,7 +89,7 @@ function SessionProgress({ count, total }: SessionProgressProps) {
   )
 }
 
-type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'profile' | 'insights' | 'privacy' | 'terms'
+type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'verify' | 'profile' | 'insights' | 'privacy' | 'terms'
 
 export default function App() {
   const swipeCardRef = useRef<SwipeCardHandle | null>(null)
@@ -104,6 +105,7 @@ export default function App() {
   const [swiping, setSwiping] = useState(false)
   const [cardKey, setCardKey] = useState(0)
   const [currentUser, setCurrentUser] = useState<UserInfo | null>(null)
+  const [pendingVerifyEmail, setPendingVerifyEmail] = useState('')
   const [guestDietary, setGuestDietary] = useState<GuestPrefs>(EMPTY_DIETARY)
   const [paywall, setPaywall] = useState<{ open: boolean; context: string }>({ open: false, context: '' })
   const isPremium = effectivePremium(currentUser)
@@ -373,17 +375,26 @@ export default function App() {
           onSuccess={user => { setCurrentUser(user); navigateBack(); void loadNextCard() }}
           onSwitchToRegister={() => setScreen('register')}
           onBack={navigateBack}
+          onNeedsVerification={email => { setPendingVerifyEmail(email); setScreen('verify') }}
         />
       )}
 
       {screen === 'register' && (
         <RegisterForm
-          onSuccess={user => { setCurrentUser(user); navigateBack(); void loadNextCard() }}
+          onNeedsVerification={email => { setPendingVerifyEmail(email); setScreen('verify') }}
           onSwitchToLogin={() => setScreen('login')}
           onBack={navigateBack}
           isGuest={currentUser !== null && !currentUser.is_registered}
           onOpenTerms={() => openLegal('terms')}
           onOpenPrivacy={() => openLegal('privacy')}
+        />
+      )}
+
+      {screen === 'verify' && (
+        <EmailVerification
+          email={pendingVerifyEmail}
+          onVerified={user => { setCurrentUser(user); setPendingVerifyEmail(''); setScreen('swipe'); void loadNextCard() }}
+          onBack={() => setScreen('login')}
         />
       )}
 

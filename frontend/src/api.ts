@@ -140,6 +140,7 @@ export interface UserInfo {
   onboarding_complete: boolean
   is_premium: boolean
   is_admin: boolean
+  email_verified: boolean
 }
 
 export interface AuthResult extends UserInfo {
@@ -197,14 +198,47 @@ async function requestNoAuth<T>(method: string, path: string, body?: unknown): P
   return data as T
 }
 
+// Registration no longer starts a session: the account is created unverified
+// and login is blocked until the emailed code is confirmed. The returned token
+// is held by the verify screen and only persisted by verifyEmail() on success.
 export async function register(email: string, password: string, name?: string): Promise<AuthResult> {
-  const result = await request<AuthResult>('POST', '/api/auth/register', { email, password, name })
+  return request<AuthResult>('POST', '/api/auth/register', { email, password, name })
+}
+
+// Confirm the 6-digit code. On success this is where the real session begins.
+export async function verifyEmail(email: string, code: string): Promise<AuthResult> {
+  const result = await requestNoAuth<AuthResult>('POST', '/api/auth/verify-email', { email, code })
   await setToken(result.api_token)
   return result
 }
 
+export async function resendVerification(email: string): Promise<void> {
+  await requestNoAuth('POST', '/api/auth/resend-verification', { email })
+}
+
+// Thrown by login() when the account exists but hasn't verified its email yet,
+// so the UI can route the user into the verification step.
+export class EmailNotVerifiedError extends Error {
+  email: string
+  constructor(email: string) {
+    super('please verify your email')
+    this.name = 'EmailNotVerifiedError'
+    this.email = email
+  }
+}
+
 export async function login(email: string, password: string): Promise<AuthResult> {
-  const result = await requestNoAuth<AuthResult>('POST', '/api/auth/login', { email, password })
+  let result: AuthResult
+  try {
+    result = await requestNoAuth<AuthResult>('POST', '/api/auth/login', { email, password })
+  } catch (err) {
+    // The server returns 403 "please verify your email" for an unverified
+    // account — surface it as a typed error so the UI can open the verify step.
+    if (err instanceof Error && err.message.toLowerCase().includes('verify your email')) {
+      throw new EmailNotVerifiedError(email)
+    }
+    throw err
+  }
   await setToken(result.api_token)
   return result
 }

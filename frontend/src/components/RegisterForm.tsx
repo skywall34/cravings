@@ -1,6 +1,5 @@
 import { useState, useMemo } from 'react'
 import { register } from '../api'
-import type { UserInfo } from '../api'
 
 const ACCENT = '#E85D04'
 const TEXT_PRIMARY = '#1A1A1A'
@@ -9,7 +8,9 @@ const FIELD_BG = '#FAFAF8'
 const FIELD_BORDER = '#E8E0D8'
 
 interface RegisterFormProps {
-  onSuccess: (user: UserInfo) => void
+  // Fired once the account is created; the email still needs verification, so
+  // the app routes to the verify step rather than starting a session here.
+  onNeedsVerification: (email: string) => void
   onSwitchToLogin: () => void
   onBack: () => void
   isGuest: boolean
@@ -17,7 +18,7 @@ interface RegisterFormProps {
   onOpenPrivacy?: () => void
 }
 
-export function RegisterForm({ onSuccess, onSwitchToLogin, onBack, isGuest, onOpenTerms, onOpenPrivacy }: RegisterFormProps) {
+export function RegisterForm({ onNeedsVerification, onSwitchToLogin, onBack, isGuest, onOpenTerms, onOpenPrivacy }: RegisterFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [name, setName] = useState('')
@@ -32,9 +33,10 @@ export function RegisterForm({ onSuccess, onSwitchToLogin, onBack, isGuest, onOp
       return
     }
     setLoading(true)
+    const normalizedEmail = email.trim()
     try {
-      const result = await register(email.trim(), password, isGuest ? undefined : name.trim() || undefined)
-      onSuccess(result)
+      await register(normalizedEmail, password, isGuest ? undefined : name.trim() || undefined)
+      onNeedsVerification(normalizedEmail)
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Registration failed'
       if (msg.toLowerCase().includes('already registered')) {

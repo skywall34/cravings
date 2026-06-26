@@ -120,6 +120,36 @@ class LoginBody(BaseModel):
             raise ValueError(f"invalid email: {e}") from e
 
 
+class VerifyEmailBody(BaseModel):
+    email: str
+    code: str
+
+    @field_validator("email")
+    @classmethod
+    def _norm_email(cls, v: str) -> str:
+        try:
+            return validate_email(v.strip(), check_deliverability=False).normalized
+        except EmailNotValidError as e:
+            raise ValueError(f"invalid email: {e}") from e
+
+    @field_validator("code")
+    @classmethod
+    def _norm_code(cls, v: str) -> str:
+        return v.strip()
+
+
+class ResendVerificationBody(BaseModel):
+    email: str
+
+    @field_validator("email")
+    @classmethod
+    def _norm_email(cls, v: str) -> str:
+        try:
+            return validate_email(v.strip(), check_deliverability=False).normalized
+        except EmailNotValidError as e:
+            raise ValueError(f"invalid email: {e}") from e
+
+
 class PasswordBody(BaseModel):
     # Length/ordering checks stay in the handler so "wrong old password" still
     # wins (401) over "new password too short" (400), preserving the contract.
@@ -141,6 +171,7 @@ class UserInfoOut(BaseModel):
     onboarding_complete: bool
     is_premium: bool
     is_admin: bool
+    email_verified: bool
 
     @classmethod
     def of(cls, row, dietary_mask: int | None = None, safety_mask: int | None = None) -> "UserInfoOut":
@@ -156,6 +187,7 @@ class UserInfoOut(BaseModel):
             onboarding_complete=bool(row["onboarding_complete"]),
             is_premium=bool(row.get("is_premium", 0)),
             is_admin=is_admin_email(row["email"]),
+            email_verified=bool(row.get("email_verified", 0)),
         )
 
 
@@ -168,3 +200,4 @@ class AuthResultOut(BaseModel):
     onboarding_complete: bool
     is_premium: bool
     is_admin: bool
+    email_verified: bool = False

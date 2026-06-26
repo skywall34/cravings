@@ -40,11 +40,14 @@ from schemas import (
     PasswordBody,
     PatchMeBody,
     RegisterBody,
+    ResendVerificationBody,
     SessionResetBody,
     SwipeBody,
     UserInfoOut,
+    VerifyEmailBody,
     is_admin_email,
 )
+from email_service import get_email_sender, send_verification_email
 from tagging import safety
 from tagging.client import tag_food_item
 
@@ -86,6 +89,9 @@ async def lifespan(app: FastAPI):
         refill_seconds=float(os.environ.get("CRAVINGS_AUTH_REFILL_SECONDS", "60")),
     )
     _payment_provider = make_payment_provider()
+    # Resolve the email sender at boot so a misconfigured prod (no SMTP_*) fails
+    # fast here instead of on the first user's registration.
+    get_email_sender()
 
     yield
 
@@ -445,11 +451,19 @@ async def auth_register(body: RegisterBody, request: Request, conn=Depends(_get_
         raise HTTPException(status_code=409, detail="email already registered, please log in")
 
     password_hash = db.hash_password(body.password)
+    # The account starts unverified (email_verified defaults to 0). Login is
+    # blocked until the user confirms the 6-digit code we email next. The token
+    # is returned only so the client can drive the verify screen — the frontend
+    # does not persist it as a session until verification succeeds.
     user_id, token = db.create_registered_user(conn, body.email, password_hash, body.name)
+    code = db.generate_verification_code()
+    db.upsert_verification(conn, body.email, code)
+    await send_verification_email(get_email_sender(), body.email, code)
     return AuthResultOut(
         id=user_id, name=body.name, email=body.email, api_token=token,
         is_registered=True, onboarding_complete=False,
         is_premium=False, is_admin=is_admin_email(body.email),
+        email_verified=False,
     )
 
 
@@ -463,12 +477,71 @@ async def auth_login(body: LoginBody, request: Request, conn=Depends(_get_conn))
         await asyncio.sleep(0.25)
         raise HTTPException(status_code=401, detail="invalid email or password")
 
+    # Gate login on verification — only after a correct password so we never
+    # disclose verification state to someone guessing credentials.
+    if not user["email_verified"]:
+        raise HTTPException(status_code=403, detail="please verify your email")
+
     return AuthResultOut(
         id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
         is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
         is_premium=bool(user.get("is_premium", 0)),
         is_admin=is_admin_email(user["email"]),
+        email_verified=True,
     )
+
+
+@app.post("/api/auth/verify-email", response_model=AuthResultOut)
+async def auth_verify_email(body: VerifyEmailBody, request: Request, conn=Depends(_get_conn)):
+    await _auth_throttle(f"verify|ip:{_client_ip(request)}|email:{body.email}")
+    user = db.get_user_by_email(conn, body.email)
+    rec = db.get_verification(conn, body.email)
+    # Generic failure for missing user/code keeps the two cases indistinguishable.
+    if not user or not rec:
+        raise HTTPException(status_code=400, detail="invalid or expired code")
+    if db.verification_is_expired(rec):
+        db.delete_verification(conn, body.email)
+        raise HTTPException(status_code=400, detail="verification code expired, request a new one")
+    if rec["attempts"] >= db.VERIFICATION_MAX_ATTEMPTS:
+        db.delete_verification(conn, body.email)
+        raise HTTPException(status_code=400, detail="too many attempts, request a new code")
+    if not db.verification_code_matches(rec, body.code):
+        attempts = db.bump_verification_attempts(conn, body.email)
+        if attempts >= db.VERIFICATION_MAX_ATTEMPTS:
+            db.delete_verification(conn, body.email)
+        raise HTTPException(status_code=400, detail="invalid or expired code")
+
+    db.set_email_verified(conn, user["id"])
+    db.delete_verification(conn, body.email)
+    return AuthResultOut(
+        id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
+        is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
+        is_premium=bool(user.get("is_premium", 0)),
+        is_admin=is_admin_email(user["email"]),
+        email_verified=True,
+    )
+
+
+@app.post("/api/auth/resend-verification")
+async def auth_resend_verification(body: ResendVerificationBody, request: Request, conn=Depends(_get_conn)):
+    await _auth_throttle(f"resend|ip:{_client_ip(request)}|email:{body.email}")
+    user = db.get_user_by_email(conn, body.email)
+    # Only act for an existing, still-unverified account; otherwise return ok
+    # without sending so we don't disclose which addresses are registered.
+    if user and not user["email_verified"]:
+        rec = db.get_verification(conn, body.email)
+        if rec:
+            wait = db.verification_resend_too_soon(rec)
+            if wait > 0:
+                raise HTTPException(
+                    status_code=429,
+                    detail={"detail": "please wait before requesting another code", "retry_after": wait},
+                    headers={"Retry-After": str(wait)},
+                )
+        code = db.generate_verification_code()
+        db.upsert_verification(conn, body.email, code)
+        await send_verification_email(get_email_sender(), body.email, code)
+    return {"ok": True}
 
 
 @app.post("/api/auth/logout")

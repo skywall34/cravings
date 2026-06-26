@@ -36,6 +36,16 @@ from db.users import (
     create_billing_session,
     get_billing_session,
     complete_billing_session,
+    generate_verification_code,
+    set_email_verified,
+    upsert_verification,
+    get_verification,
+    bump_verification_attempts,
+    delete_verification,
+    verification_is_expired,
+    verification_resend_too_soon,
+    verification_code_matches,
+    VERIFICATION_MAX_ATTEMPTS,
 )
 from db.food import (
     insert_food_item,
@@ -81,6 +91,10 @@ __all__ = [
     "mark_onboarding_complete", "get_user_by_email", "attach_credentials",
     "create_registered_user", "rotate_api_token", "update_password",
     "hash_password", "verify_password", "get_recent_likes", "push_recent_like",
+    "generate_verification_code", "set_email_verified", "upsert_verification",
+    "get_verification", "bump_verification_attempts", "delete_verification",
+    "verification_is_expired", "verification_resend_too_soon",
+    "verification_code_matches", "VERIFICATION_MAX_ATTEMPTS",
     # food
     "insert_food_item", "insert_restaurant", "get_restaurant_by_name",
     "get_food_item_by_name", "get_embeddings_for_items", "get_untagged_items",

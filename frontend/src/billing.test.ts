@@ -16,7 +16,7 @@ vi.mock('./storage', () => ({
 const base: UserInfo = {
   id: 1, name: 'Test', email: null,
   is_registered: false, onboarding_complete: false,
-  is_premium: false, is_admin: false,
+  is_premium: false, is_admin: false, email_verified: false,
 }
 
 describe('effectivePremium', () => {

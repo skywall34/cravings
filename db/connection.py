@@ -78,6 +78,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN is_premium INTEGER NOT NULL DEFAULT 0")
     if "premium_since" not in user_cols:
         conn.execute("ALTER TABLE users ADD COLUMN premium_since TIMESTAMP")
+    if "email_verified" not in user_cols:
+        conn.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+        # Grandfather existing registered users — they predate verification and
+        # must not be locked out of login.
+        conn.execute("UPDATE users SET email_verified = 1 WHERE email IS NOT NULL")
 
     conn.execute(
         "CREATE TABLE IF NOT EXISTS billing_sessions ("

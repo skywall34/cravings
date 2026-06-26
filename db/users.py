@@ -1,8 +1,11 @@
 """User CRUD, authentication, and recent-likes management."""
 
+import hashlib
+import hmac
 import json
 import secrets
 import sqlite3
+from datetime import datetime, timedelta, timezone
 
 import bcrypt as _bcrypt
 
@@ -147,6 +150,96 @@ def hash_password(plain: str) -> str:
 
 def verify_password(plain: str, hashed: str) -> bool:
     return _bcrypt.checkpw(plain.encode(), hashed.encode())
+
+
+# ---------------------------------------------------------------------------
+# Email verification (one-time 6-digit codes)
+#
+# Codes are short-lived and low-entropy, so bcrypt (slow, per-attempt) is the
+# wrong tool — a sha256 hash plus a constant-time compare is sufficient and we
+# never persist the plaintext. Login is gated on users.email_verified.
+# ---------------------------------------------------------------------------
+
+VERIFICATION_TTL_MINUTES = 10
+VERIFICATION_RESEND_COOLDOWN_SECONDS = 30
+VERIFICATION_MAX_ATTEMPTS = 5
+
+
+def generate_verification_code() -> str:
+    """Return a zero-padded 6-digit numeric code."""
+    return f"{secrets.randbelow(1_000_000):06d}"
+
+
+def hash_verification_code(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def set_email_verified(conn: sqlite3.Connection, user_id: int) -> None:
+    conn.execute(
+        "UPDATE users SET email_verified = 1, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        [user_id],
+    )
+    conn.commit()
+
+
+def upsert_verification(conn: sqlite3.Connection, email: str, code: str) -> None:
+    """Store (or replace) the active code for an email, resetting attempts."""
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=VERIFICATION_TTL_MINUTES)
+    conn.execute(
+        "INSERT INTO email_verifications (email, code_hash, expires_at, attempts, last_sent_at) "
+        "VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(email) DO UPDATE SET "
+        "  code_hash = excluded.code_hash, expires_at = excluded.expires_at, "
+        "  attempts = 0, last_sent_at = CURRENT_TIMESTAMP",
+        [email.lower(), hash_verification_code(code), expires_at.isoformat()],
+    )
+    conn.commit()
+
+
+def get_verification(conn: sqlite3.Connection, email: str) -> dict | None:
+    row = conn.execute(
+        "SELECT * FROM email_verifications WHERE email = ?", [email.lower()]
+    ).fetchone()
+    return dict(row) if row else None
+
+
+def bump_verification_attempts(conn: sqlite3.Connection, email: str) -> int:
+    """Increment the failed-attempt counter and return the new value."""
+    conn.execute(
+        "UPDATE email_verifications SET attempts = attempts + 1 WHERE email = ?",
+        [email.lower()],
+    )
+    conn.commit()
+    row = conn.execute(
+        "SELECT attempts FROM email_verifications WHERE email = ?", [email.lower()]
+    ).fetchone()
+    return row["attempts"] if row else 0
+
+
+def delete_verification(conn: sqlite3.Connection, email: str) -> None:
+    conn.execute("DELETE FROM email_verifications WHERE email = ?", [email.lower()])
+    conn.commit()
+
+
+def verification_is_expired(row: dict) -> bool:
+    expires = datetime.fromisoformat(row["expires_at"])
+    if expires.tzinfo is None:
+        expires = expires.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc) >= expires
+
+
+def verification_resend_too_soon(row: dict) -> int:
+    """Seconds remaining on the resend cooldown, or 0 if a resend is allowed."""
+    sent = datetime.fromisoformat(row["last_sent_at"])
+    if sent.tzinfo is None:
+        sent = sent.replace(tzinfo=timezone.utc)
+    elapsed = (datetime.now(timezone.utc) - sent).total_seconds()
+    remaining = VERIFICATION_RESEND_COOLDOWN_SECONDS - elapsed
+    return max(0, int(remaining + 0.999)) if remaining > 0 else 0
+
+
+def verification_code_matches(row: dict, code: str) -> bool:
+    return hmac.compare_digest(row["code_hash"], hash_verification_code(code))
 
 
 def get_recent_likes(conn: sqlite3.Connection, user_id: int) -> list[int]:

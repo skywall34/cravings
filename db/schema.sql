@@ -29,6 +29,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT,
     password_changed_at TIMESTAMP,
     token_issued_at TIMESTAMP,
+    -- email_verified: 0 until the user confirms their address via a one-time code.
+    -- Login is blocked while 0. Existing pre-migration users are backfilled to 1.
+    email_verified INTEGER NOT NULL DEFAULT 0,
 
     -- Premium
     is_premium INTEGER NOT NULL DEFAULT 0,
@@ -39,6 +42,18 @@ CREATE TABLE IF NOT EXISTS users (
 );
 
 CREATE INDEX IF NOT EXISTS idx_users_api_token ON users(api_token);
+
+-- One active email-verification code per address. The plaintext code is never
+-- stored — only its sha256 hash. Rows are short-lived (expire_at) and deleted
+-- on success, expiry, or too many failed attempts.
+CREATE TABLE IF NOT EXISTS email_verifications (
+    email        TEXT PRIMARY KEY,            -- lowercased email
+    code_hash    TEXT NOT NULL,               -- sha256 hex of the 6-digit code
+    expires_at   TIMESTAMP NOT NULL,
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    created_at   TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
 
 CREATE TABLE IF NOT EXISTS restaurants (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

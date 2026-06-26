@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { login } from '../api'
+import { login, EmailNotVerifiedError } from '../api'
 import type { UserInfo } from '../api'
 
 const ACCENT = '#E85D04'
@@ -12,9 +12,11 @@ interface LoginFormProps {
   onSuccess: (user: UserInfo) => void
   onSwitchToRegister: () => void
   onBack: () => void
+  // A correct password on an unverified account routes here to finish verifying.
+  onNeedsVerification: (email: string) => void
 }
 
-export function LoginForm({ onSuccess, onSwitchToRegister, onBack }: LoginFormProps) {
+export function LoginForm({ onSuccess, onSwitchToRegister, onBack, onNeedsVerification }: LoginFormProps) {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -28,6 +30,10 @@ export function LoginForm({ onSuccess, onSwitchToRegister, onBack }: LoginFormPr
       const result = await login(email.trim(), password)
       onSuccess(result)
     } catch (err) {
+      if (err instanceof EmailNotVerifiedError) {
+        onNeedsVerification(err.email)
+        return
+      }
       setError(err instanceof Error ? err.message : 'Login failed')
     } finally {
       setLoading(false)

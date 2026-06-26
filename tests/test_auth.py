@@ -17,6 +17,10 @@ os.environ.setdefault("CRAVINGS_DB", TEST_DB)
 import main  # noqa: E402
 import db.database as _db  # noqa: E402
 
+# Codes the app "emails" during a test, keyed by lowercased address. Populated by
+# the capture_codes fixture which stands in for the real email sender.
+_sent_codes: dict[str, str] = {}
+
 
 @pytest_asyncio.fixture(autouse=True)
 async def reset_db():
@@ -27,6 +31,25 @@ async def reset_db():
     _db.init_db(active_db)
     main._sessions.clear_all()
     yield
+
+
+@pytest.fixture(autouse=True)
+def capture_codes(monkeypatch):
+    """Intercept verification emails so tests can read the generated code."""
+    _sent_codes.clear()
+
+    async def _fake_send(_sender, email, code):
+        _sent_codes[email.lower()] = code
+
+    monkeypatch.setattr(main, "send_verification_email", _fake_send)
+    yield
+
+
+async def _verify(client, email):
+    """Submit the captured code for `email` and return the response."""
+    return await client.post(
+        "/api/auth/verify-email", json={"email": email, "code": _sent_codes[email.lower()]}
+    )
 
 
 @pytest_asyncio.fixture
@@ -46,8 +69,12 @@ async def registered_client(client):
     })
     assert resp.status_code == 201
     data = resp.json()
-    client.headers["Authorization"] = f"Bearer {data['api_token']}"
-    yield client, data["api_token"], data["id"]
+    # Finish verification so the fixture yields a fully active registered user.
+    vresp = await _verify(client, "auth_test_user@example.com")
+    assert vresp.status_code == 200
+    token = vresp.json()["api_token"]
+    client.headers["Authorization"] = f"Bearer {token}"
+    yield client, token, data["id"]
 
 
 # ---------------------------------------------------------------------------
@@ -66,6 +93,7 @@ async def test_register_cold(client):
     assert data["email"] == "alice@example.com"
     assert data["is_registered"] is True
     assert data["onboarding_complete"] is False
+    assert data["email_verified"] is False
     assert "api_token" in data
 
 
@@ -117,12 +145,13 @@ async def test_register_invalid_email(client):
 # ---------------------------------------------------------------------------
 
 async def test_login_success(client):
-    """Login with correct credentials returns token."""
+    """Login with correct credentials returns token once the email is verified."""
     await client.post("/api/auth/register", json={
         "email": "frank@example.com",
         "password": "correcthorse",
         "name": "Frank",
     })
+    assert (await _verify(client, "frank@example.com")).status_code == 200
     resp = await client.post("/api/auth/login", json={
         "email": "frank@example.com",
         "password": "correcthorse",
@@ -131,6 +160,7 @@ async def test_login_success(client):
     data = resp.json()
     assert "api_token" in data
     assert data["email"] == "frank@example.com"
+    assert data["email_verified"] is True
 
 
 async def test_login_bad_password(client):
@@ -154,6 +184,136 @@ async def test_login_unknown_email(client):
         "password": "whatever",
     })
     assert resp.status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Email verification
+# ---------------------------------------------------------------------------
+
+async def test_login_blocked_until_verified(client):
+    """A correct password on an unverified account is rejected with 403."""
+    await client.post("/api/auth/register", json={
+        "email": "unv@example.com", "password": "correcthorse", "name": "Unv",
+    })
+    resp = await client.post("/api/auth/login", json={
+        "email": "unv@example.com", "password": "correcthorse",
+    })
+    assert resp.status_code == 403
+    assert "verify" in resp.json()["detail"].lower()
+
+
+async def test_verify_email_then_login(client):
+    """Verifying with the emailed code flips the flag and unblocks login."""
+    await client.post("/api/auth/register", json={
+        "email": "verme@example.com", "password": "correcthorse", "name": "Ver",
+    })
+    vresp = await _verify(client, "verme@example.com")
+    assert vresp.status_code == 200
+    assert vresp.json()["email_verified"] is True
+    assert "api_token" in vresp.json()
+
+    login = await client.post("/api/auth/login", json={
+        "email": "verme@example.com", "password": "correcthorse",
+    })
+    assert login.status_code == 200
+
+
+async def test_verify_wrong_code(client):
+    """A wrong code returns 400 and does not verify the account."""
+    await client.post("/api/auth/register", json={
+        "email": "wrong@example.com", "password": "correcthorse", "name": "W",
+    })
+    resp = await client.post("/api/auth/verify-email", json={
+        "email": "wrong@example.com", "code": "000000",
+    })
+    assert resp.status_code == 400
+    # still blocked
+    login = await client.post("/api/auth/login", json={
+        "email": "wrong@example.com", "password": "correcthorse",
+    })
+    assert login.status_code == 403
+
+
+async def test_verify_max_attempts_invalidates_code(client):
+    """After 5 wrong attempts the code is invalidated; the real code stops working."""
+    main._auth_limiter.reset()
+    await client.post("/api/auth/register", json={
+        "email": "brute@example.com", "password": "correcthorse", "name": "B",
+    })
+    real_code = _sent_codes["brute@example.com"]
+    for _ in range(5):
+        r = await client.post("/api/auth/verify-email", json={
+            "email": "brute@example.com", "code": "111111",
+        })
+        assert r.status_code == 400
+    # Reset the throttle so the final check exercises code-invalidation, not the
+    # rate limiter (5 wrong attempts already spent the burst).
+    main._auth_limiter.reset()
+    # even the correct code now fails — it was wiped after too many attempts
+    after = await client.post("/api/auth/verify-email", json={
+        "email": "brute@example.com", "code": real_code,
+    })
+    assert after.status_code == 400
+
+
+async def test_verify_expired_code(client):
+    """An expired code is rejected and cleared."""
+    await client.post("/api/auth/register", json={
+        "email": "stale@example.com", "password": "correcthorse", "name": "S",
+    })
+    # Force the stored code to be in the past.
+    conn = sqlite3.connect(str(main._db_path))
+    conn.execute(
+        "UPDATE email_verifications SET expires_at = '2000-01-01T00:00:00+00:00' WHERE email = ?",
+        ["stale@example.com"],
+    )
+    conn.commit()
+    conn.close()
+    resp = await _verify(client, "stale@example.com")
+    assert resp.status_code == 400
+    assert "expired" in resp.json()["detail"].lower()
+
+
+async def test_resend_respects_cooldown(client):
+    """A resend within the 30s cooldown is throttled with 429."""
+    main._auth_limiter.reset()
+    await client.post("/api/auth/register", json={
+        "email": "resend@example.com", "password": "correcthorse", "name": "R",
+    })
+    resp = await client.post("/api/auth/resend-verification", json={
+        "email": "resend@example.com",
+    })
+    assert resp.status_code == 429
+    assert "Retry-After" in resp.headers
+
+
+async def test_resend_unknown_email_is_ok(client):
+    """Resend for an unknown address returns ok without disclosing existence."""
+    main._auth_limiter.reset()
+    resp = await client.post("/api/auth/resend-verification", json={
+        "email": "ghost@example.com",
+    })
+    assert resp.status_code == 200
+    assert resp.json() == {"ok": True}
+
+
+async def test_migration_backfills_existing_registered_users(client):
+    """Pre-migration registered users are grandfathered as verified."""
+    conn = sqlite3.connect(str(main._db_path))
+    conn.row_factory = sqlite3.Row
+    # Simulate a legacy DB: drop the column and add a registered user without it.
+    conn.execute("ALTER TABLE users DROP COLUMN email_verified")
+    conn.execute(
+        "INSERT INTO users (name, api_token, email, password_hash) "
+        "VALUES ('Legacy', 'legacy-token', 'legacy@example.com', 'x')"
+    )
+    conn.commit()
+    _db._migrate(conn)
+    row = conn.execute(
+        "SELECT email_verified FROM users WHERE email = 'legacy@example.com'"
+    ).fetchone()
+    conn.close()
+    assert row["email_verified"] == 1
 
 
 # ---------------------------------------------------------------------------
