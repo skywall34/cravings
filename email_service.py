@@ -56,6 +56,7 @@ class SmtpSender:
         password: str | None,
         sender: str,
         use_starttls: bool,
+        use_ssl: bool = False,
     ) -> None:
         self._host = host
         self._port = port
@@ -63,6 +64,7 @@ class SmtpSender:
         self._password = password
         self._sender = sender
         self._use_starttls = use_starttls
+        self._use_ssl = use_ssl
 
     def _send_sync(self, to: str, subject: str, body: str) -> None:
         msg = EmailMessage()
@@ -70,8 +72,14 @@ class SmtpSender:
         msg["To"] = to
         msg["Subject"] = subject
         msg.set_content(body)
-        with smtplib.SMTP(self._host, self._port, timeout=10) as smtp:
-            if self._use_starttls:
+        # Port 465 = implicit TLS (handshake on connect, no plaintext banner) →
+        # SMTP_SSL. Port 587/2525 = plaintext connect then STARTTLS upgrade.
+        if self._use_ssl:
+            smtp_cm = smtplib.SMTP_SSL(self._host, self._port, timeout=10)
+        else:
+            smtp_cm = smtplib.SMTP(self._host, self._port, timeout=10)
+        with smtp_cm as smtp:
+            if self._use_starttls and not self._use_ssl:
                 smtp.starttls()
             if self._username:
                 smtp.login(self._username, self._password or "")
@@ -100,13 +108,17 @@ def _build_sender() -> EmailSender:
                 "CRAVINGS_ENV=dev to allow the console email fallback."
             )
         return ConsoleSender()
+    port = int(os.environ.get("SMTP_PORT", "587"))
+    # Implicit TLS when explicitly asked, or on the conventional SSL port 465.
+    use_ssl = os.environ.get("SMTP_SSL", "").lower() in {"1", "true", "yes"} or port == 465
     return SmtpSender(
         host=host,
-        port=int(os.environ.get("SMTP_PORT", "587")),
+        port=port,
         username=os.environ.get("SMTP_USER"),
         password=os.environ.get("SMTP_PASS"),
         sender=os.environ.get("SMTP_FROM", "Cravings <no-reply@cravings.app>"),
         use_starttls=os.environ.get("SMTP_STARTTLS", "1") != "0",
+        use_ssl=use_ssl,
     )
 
 
