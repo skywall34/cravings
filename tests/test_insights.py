@@ -19,7 +19,7 @@ os.environ.pop("CRAVINGS_BILLING_PROVIDER", None)
 
 import main  # noqa: E402
 import db.database as _db  # noqa: E402
-from db.swipe_events import get_insights  # noqa: E402
+from db.swipe_events import get_insights, recent_rejection_rate  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -310,6 +310,21 @@ def test_left_swipes_ignored_in_axes():
     _insert_swipe(conn, user_id, item_mild, "left", 12.0)  # must be ignored
     data = get_insights(conn, user_id)
     assert data["axes"]["Heat"] == 100
+
+
+def test_never_swipes_count_toward_rejection_rate():
+    """`never` (reward 0.0, the hardest reject) must count as a rejection (MC1),
+    or a user who only ever swipes 'never' never trips the drift threshold."""
+    conn = _make_conn()
+    user_id = 1
+    conn.execute(
+        "INSERT INTO users (id, api_token, name) VALUES (?, 'tok1', 'u')", [user_id]
+    )
+    item = _insert_food_item(conn, "Item")
+    for _ in range(4):
+        _insert_swipe(conn, user_id, item, "never", 12.0)
+    _insert_swipe(conn, user_id, item, "right", 12.0)
+    assert recent_rejection_rate(conn, user_id) == 0.8
 
 
 # ---------------------------------------------------------------------------

@@ -1,12 +1,9 @@
 """FastAPI entry point — single-process replacement for the Go + gRPC split."""
 
-import asyncio
-import hmac
 import logging
 import mimetypes
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 from pathlib import Path
 
 # python:3.12-slim ships without /etc/mime.types — register webp explicitly
@@ -14,41 +11,22 @@ from pathlib import Path
 mimetypes.add_type("image/webp", ".webp")
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Query, Request, Response, status
+from fastapi import FastAPI, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.security.http import HTTPBearer as _OptionalBearer
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
 import db.database as db
-import db.metrics as metrics
 import swipe
 from model_server.model_service import UserModelStore
 from model_server.recommendation_service import ModelServer
-from places import PlacesAdapter, PlacesError
+from places import PlacesAdapter
 from rate_limit import RateLimiter
 from billing import make_payment_provider
-from recommender import make_recommender
-from schemas import (
-    AuthResultOut,
-    LoginBody,
-    OnboardingBody,
-    PasswordBody,
-    PatchMeBody,
-    RegisterBody,
-    ResendVerificationBody,
-    SessionResetBody,
-    SwipeBody,
-    UserInfoOut,
-    VerifyEmailBody,
-    is_admin_email,
-)
 from email_service import get_email_sender, send_verification_email
-from tagging import safety
 from tagging.client import tag_food_item
 
 logger = logging.getLogger(__name__)
@@ -126,10 +104,6 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type"],
 )
 
-_bearer = HTTPBearer()
-_optional_bearer = HTTPBearer(auto_error=False)
-
-
 @app.middleware("http")
 async def _image_cache_headers(request: Request, call_next):
     response: Response = await call_next(request)
@@ -180,34 +154,6 @@ async def _log_errors(request: Request, call_next):
 
 
 # ---------------------------------------------------------------------------
-# Dependencies
-# ---------------------------------------------------------------------------
-
-async def _get_conn():
-    conn = db.get_connection(_db_path)
-    try:
-        yield conn
-    finally:
-        conn.close()
-
-
-async def _get_user(
-    credentials: HTTPAuthorizationCredentials = Depends(_bearer),
-    conn=Depends(_get_conn),
-):
-    user = db.get_user_by_token(conn, credentials.credentials)
-    if user is None:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid token")
-    if (
-        user["password_changed_at"]
-        and user["token_issued_at"]
-        and user["token_issued_at"] < user["password_changed_at"]
-    ):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="token invalidated")
-    return user
-
-
-# ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
@@ -216,518 +162,20 @@ async def health():
     return {"status": "ok"}
 
 
-
-@app.get("/api/users/me", response_model=UserInfoOut)
-async def get_me(user=Depends(_get_user)):
-    return UserInfoOut.of(user)
-
-
-@app.patch("/api/users/me", response_model=UserInfoOut)
-async def patch_me(body: PatchMeBody, user=Depends(_get_user), conn=Depends(_get_conn)):
-    # None = field omitted → keep existing; validators already rejected bad flags.
-    diet_mask = (
-        safety.compute_dietary_bitmask(body.dietary_restrictions)
-        if body.dietary_restrictions is not None
-        else user["dietary_flags_bitmask"]
-    )
-    safety_mask = (
-        safety.compute_safety_bitmask(body.safety_overrides)
-        if body.safety_overrides is not None
-        else user["safety_overrides_bitmask"]
-    )
-    db.update_user_dietary(conn, user["id"], diet_mask, safety_mask)
-    return UserInfoOut.of(user, dietary_mask=diet_mask, safety_mask=safety_mask)
-
-
-@app.delete("/api/users/me", status_code=204)
-async def delete_me(user=Depends(_get_user), conn=Depends(_get_conn)):
-    """GDPR Art. 17 — right to erasure. Deletes all user data immediately."""
-    user_id = user["id"]
-    db.delete_swipes_for_user(conn, user_id)
-    db.delete_impressions_for_user(conn, user_id)
-    db.delete_user(conn, user_id)
-    conn.commit()
-
-
-@app.get("/api/users/me/export")
-async def export_me(user=Depends(_get_user), conn=Depends(_get_conn)):
-    """GDPR Art. 20 — data portability. Returns all stored user data as JSON."""
-    swipes = db.get_all_swipes_for_user(conn, user["id"])
-    payload = {
-        "account": {
-            "name": user["name"],
-            "email": user["email"],
-            "created_at": user["created_at"],
-        },
-        "preferences": {
-            "dietary_restrictions": safety.dietary_list_from_bitmask(user["dietary_flags_bitmask"]),
-            "safety_overrides": safety.safety_list_from_bitmask(user["safety_overrides_bitmask"]),
-            "onboarding_complete": bool(user["onboarding_complete"]),
-        },
-        "swipe_history": swipes,
-        "stats": {
-            "total_swipes": user["total_swipes"],
-            "drift_active": bool(user["drift_active"]),
-        },
-        "exported_at": datetime.now(timezone.utc).isoformat(),
-    }
-    return JSONResponse(
-        content=payload,
-        headers={"Content-Disposition": 'attachment; filename="cravings-data.json"'},
-    )
-
-
-@app.post("/api/onboarding")
-async def onboarding(body: OnboardingBody, user=Depends(_get_user), conn=Depends(_get_conn)):
-    await asyncio.to_thread(_model_service.set_onboarding, user["id"], body.preferences, body.reset)
-    db.mark_onboarding_complete(conn, user["id"])
-    return {"success": True}
-
-
-@app.get("/api/recommend")
-async def recommend(
-    request: Request,
-    top_n: int = Query(default=1, ge=1),
-    session_id: str = Query(default=""),
-    hour: float | None = Query(default=None),
-    dietary_restrictions: list[str] = Query(default=[]),
-    safety_overrides: list[str] = Query(default=[]),
-    excluded_ids: list[int] = Query(default=[]),
-    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
-    conn=Depends(_get_conn),
-):
-    user = None
-    if credentials:
-        user = db.get_user_by_token(conn, credentials.credentials)
-
-    taste_prefs = {
-        k[5:]: float(v)
-        for k, v in request.query_params.items()
-        if k.startswith("pref_")
-    }
-    rec = make_recommender(
-        conn=conn, user=user, sessions=_sessions, model_service=_model_service,
-        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=session_id,
-        dietary_restrictions=dietary_restrictions, safety_overrides=safety_overrides,
-        taste_prefs=taste_prefs,
-    )
-    results = await rec.recommend(
-        hour=hour, top_n=top_n, excluded_ids=excluded_ids,
-    )
-    if not results:
-        raise HTTPException(status_code=404, detail="no eligible food items")
-    return results
-
-
-@app.post("/api/swipe")
-async def swipe_endpoint(
-    body: SwipeBody,
-    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
-    conn=Depends(_get_conn),
-):
-    item = db.get_food_item(conn, body.food_item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="food item not found")
-
-    user = None
-    if credentials:
-        user = db.get_user_by_token(conn, credentials.credentials)
-
-    rec = make_recommender(
-        conn=conn, user=user, sessions=_sessions, model_service=_model_service,
-        base_path=_base_path, session_max_swipes=_session_max_swipes, session_id=body.session_id,
-        taste_prefs=body.taste_prefs,
-    )
-    try:
-        outcome = await rec.record(item=item, direction=body.direction, token=body.snapshot_token)
-    except swipe.SnapshotError as e:
-        raise HTTPException(status_code=400, detail=f"invalid snapshot: {e}") from e
-    except swipe.SwipeError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    return {"success": True, **outcome}
-
-
-@app.post("/api/session/reset")
-async def session_reset(body: SessionResetBody):
-    await _sessions.reset(body.session_id)
-    return {"success": True}
-
-
-@app.get("/api/food-items")
-async def list_food_items(conn=Depends(_get_conn), user=Depends(_get_user)):
-    return db.list_food_items(conn)
-
-
-@app.get("/api/food-items/{item_id}")
-async def get_food_item(item_id: int, conn=Depends(_get_conn), user=Depends(_get_user)):
-    item = db.get_food_item(conn, item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="not found")
-    return swipe.add_image_urls(item, _base_path)
-
-
-@app.get("/api/restaurants")
-async def list_restaurants(conn=Depends(_get_conn), user=Depends(_get_user)):
-    return db.list_restaurants(conn)
-
-
-@app.get("/api/model/status")
-async def model_status(user=Depends(_get_user)):
-    status_data = await asyncio.to_thread(_model_service.get_status, user["id"])
-    return status_data
-
-
-@app.get("/api/nearby")
-async def nearby(
-    food_item_id: int = Query(...),
-    lat: float = Query(...),
-    lng: float = Query(...),
-    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
-    conn=Depends(_get_conn),
-):
-    item = db.get_food_item(conn, food_item_id)
-    if item is None:
-        raise HTTPException(status_code=404, detail="food item not found")
-
-    user = db.get_user_by_token(conn, credentials.credentials) if credentials else None
-    rate_key = f"user:{user['id']}" if user else f"ip:{lat:.2f},{lng:.2f}"
-
-    if _places.api_key:
-        allowed, retry_after = await _nearby_limiter.consume(rate_key)
-        if not allowed:
-            retry_int = max(1, int(retry_after))
-            logger.warning("nearby rate limited key=%s retry_after=%s", rate_key, retry_int)
-            raise HTTPException(
-                status_code=429,
-                detail={"detail": "rate limited", "retry_after": retry_int},
-                headers={"Retry-After": str(retry_int)},
-            )
-
-    fallback = f"{item['cuisine_type'] or ''} restaurant".strip()
-    try:
-        # lat/lng not stored — used only for this Places API call (privacy policy commitment)
-        return await _places.search(item["name"], fallback, lat, lng)
-    except PlacesError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-
-
-# ---------------------------------------------------------------------------
-# Auth routes
-# ---------------------------------------------------------------------------
-
-def _client_ip(request: Request) -> str:
-    """Caller IP for rate-limit keying.
-
-    Behind one trusted proxy (Traefik), the genuine peer IP is the RIGHTMOST
-    X-Forwarded-For entry — the one Traefik appends. The leftmost entries are
-    client-supplied and spoofable, so trusting them would let an attacker rotate
-    the value to bypass the limit.
-    """
-    xff = request.headers.get("x-forwarded-for")
-    if xff:
-        return xff.split(",")[-1].strip()
-    return request.client.host if request.client else "unknown"
-
-
-async def _auth_throttle(key: str) -> None:
-    """Raise 429 if the auth bucket for `key` is empty. Mirrors the nearby handler."""
-    allowed, retry_after = await _auth_limiter.consume(key)
-    if not allowed:
-        retry_int = max(1, int(retry_after))
-        logger.warning("auth rate limited key=%s retry_after=%s", key, retry_int)
-        raise HTTPException(
-            status_code=429,
-            detail={"detail": "too many attempts, try again later", "retry_after": retry_int},
-            headers={"Retry-After": str(retry_int)},
-        )
-
-
-@app.post("/api/auth/register", status_code=201, response_model=AuthResultOut)
-async def auth_register(body: RegisterBody, request: Request, conn=Depends(_get_conn)):
-    await _auth_throttle(f"register|ip:{_client_ip(request)}")
-    # email/password/name already normalized + validated by RegisterBody.
-    existing = db.get_user_by_email(conn, body.email)
-    if existing:
-        raise HTTPException(status_code=409, detail="email already registered, please log in")
-
-    password_hash = db.hash_password(body.password)
-    # The account starts unverified (email_verified defaults to 0). Login is
-    # blocked until the user confirms the 6-digit code we email next. The token
-    # is returned only so the client can drive the verify screen — the frontend
-    # does not persist it as a session until verification succeeds.
-    user_id, token = db.create_registered_user(conn, body.email, password_hash, body.name)
-    code = db.generate_verification_code()
-    db.upsert_verification(conn, body.email, code)
-    await send_verification_email(get_email_sender(), body.email, code)
-    return AuthResultOut(
-        id=user_id, name=body.name, email=body.email, api_token=token,
-        is_registered=True, onboarding_complete=False,
-        is_premium=False, is_admin=is_admin_email(body.email),
-        email_verified=False,
-    )
-
-
-@app.post("/api/auth/login", response_model=AuthResultOut)
-async def auth_login(body: LoginBody, request: Request, conn=Depends(_get_conn)):
-    # Throttle before the password check so guesses are rate-limited. Fold in the
-    # email so per-account spray is bounded and one IP can't lock out all accounts.
-    await _auth_throttle(f"login|ip:{_client_ip(request)}|email:{body.email}")
-    user = db.get_user_by_email(conn, body.email)
-    if not user or not user["password_hash"] or not db.verify_password(body.password.strip(), user["password_hash"]):
-        await asyncio.sleep(0.25)
-        raise HTTPException(status_code=401, detail="invalid email or password")
-
-    # Gate login on verification — only after a correct password so we never
-    # disclose verification state to someone guessing credentials.
-    if not user["email_verified"]:
-        raise HTTPException(status_code=403, detail="please verify your email")
-
-    return AuthResultOut(
-        id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
-        is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
-        is_premium=bool(user.get("is_premium", 0)),
-        is_admin=is_admin_email(user["email"]),
-        email_verified=True,
-    )
-
-
-@app.post("/api/auth/verify-email", response_model=AuthResultOut)
-async def auth_verify_email(body: VerifyEmailBody, request: Request, conn=Depends(_get_conn)):
-    await _auth_throttle(f"verify|ip:{_client_ip(request)}|email:{body.email}")
-    user = db.get_user_by_email(conn, body.email)
-    rec = db.get_verification(conn, body.email)
-    # Generic failure for missing user/code keeps the two cases indistinguishable.
-    if not user or not rec:
-        raise HTTPException(status_code=400, detail="invalid or expired code")
-    if db.verification_is_expired(rec):
-        db.delete_verification(conn, body.email)
-        raise HTTPException(status_code=400, detail="verification code expired, request a new one")
-    if rec["attempts"] >= db.VERIFICATION_MAX_ATTEMPTS:
-        db.delete_verification(conn, body.email)
-        raise HTTPException(status_code=400, detail="too many attempts, request a new code")
-    if not db.verification_code_matches(rec, body.code):
-        attempts = db.bump_verification_attempts(conn, body.email)
-        if attempts >= db.VERIFICATION_MAX_ATTEMPTS:
-            db.delete_verification(conn, body.email)
-        raise HTTPException(status_code=400, detail="invalid or expired code")
-
-    db.set_email_verified(conn, user["id"])
-    db.delete_verification(conn, body.email)
-    return AuthResultOut(
-        id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
-        is_registered=True, onboarding_complete=bool(user["onboarding_complete"]),
-        is_premium=bool(user.get("is_premium", 0)),
-        is_admin=is_admin_email(user["email"]),
-        email_verified=True,
-    )
-
-
-@app.post("/api/auth/resend-verification")
-async def auth_resend_verification(body: ResendVerificationBody, request: Request, conn=Depends(_get_conn)):
-    await _auth_throttle(f"resend|ip:{_client_ip(request)}|email:{body.email}")
-    user = db.get_user_by_email(conn, body.email)
-    # Only act for an existing, still-unverified account; otherwise return ok
-    # without sending so we don't disclose which addresses are registered.
-    if user and not user["email_verified"]:
-        rec = db.get_verification(conn, body.email)
-        if rec:
-            wait = db.verification_resend_too_soon(rec)
-            if wait > 0:
-                raise HTTPException(
-                    status_code=429,
-                    detail={"detail": "please wait before requesting another code", "retry_after": wait},
-                    headers={"Retry-After": str(wait)},
-                )
-        code = db.generate_verification_code()
-        db.upsert_verification(conn, body.email, code)
-        await send_verification_email(get_email_sender(), body.email, code)
-    return {"ok": True}
-
-
-@app.post("/api/auth/logout")
-async def auth_logout(user=Depends(_get_user), conn=Depends(_get_conn)):
-    db.rotate_api_token(conn, user["id"])
-    return {"success": True}
-
-
-@app.post("/api/auth/password")
-async def auth_change_password(body: PasswordBody, user=Depends(_get_user), conn=Depends(_get_conn)):
-    if not user["password_hash"]:
-        raise HTTPException(status_code=400, detail="guest users cannot change password")
-    old_password = body.old_password.strip()
-    new_password = body.new_password.strip()
-    if not db.verify_password(old_password, user["password_hash"]):
-        raise HTTPException(status_code=401, detail="incorrect current password")
-    if len(new_password) < 8:
-        raise HTTPException(status_code=400, detail="new password must be at least 8 characters")
-    new_token = db.update_password(conn, user["id"], db.hash_password(new_password))
-    return {"success": True, "api_token": new_token}
-
-
-@app.get("/api/profile/stats")
-async def profile_stats(user=Depends(_get_user), conn=Depends(_get_conn)):
-    return db.get_swipe_stats(conn, user["id"])
-
-
-@app.get("/api/insights")
-async def insights(user=Depends(_get_user), conn=Depends(_get_conn)):
-    if not (user.get("is_premium") or is_admin_email(user.get("email"))):
-        raise HTTPException(status_code=403, detail="premium required")
-    return db.get_insights(conn, user["id"])
-
-
-# ---------------------------------------------------------------------------
-# Billing routes
-# ---------------------------------------------------------------------------
-
-async def _process_webhook(payload: bytes, signature: str) -> None:
-    """Parse + apply a signed webhook event. Raises ValueError on bad sig."""
-    event = _payment_provider.verify_and_parse_webhook(payload, signature)
-    if event.event_type == "checkout.session.completed":
-        with db.db_connection(_db_path) as conn:
-            session = db.get_billing_session(conn, event.session_id)
-            if session and session["status"] != "completed":
-                db.complete_billing_session(conn, event.session_id)
-                db.set_premium(conn, event.user_id)
-
-
-@app.post("/api/billing/checkout")
-async def billing_checkout(user=Depends(_get_user), conn=Depends(_get_conn)):
-    if not user.get("email"):
-        raise HTTPException(status_code=403, detail="registered account required to purchase")
-    amount_cents = int(os.environ.get("CRAVINGS_PREMIUM_PRICE_CENTS", "499"))
-    session = _payment_provider.create_checkout_session(
-        user, amount_cents, _webhook_handler=_process_webhook
-    )
-    db.create_billing_session(conn, session.session_id, user["id"], amount_cents)
-    return {
-        "session_id": session.session_id,
-        "amount_cents": session.amount_cents,
-        "provider": session.provider,
-        "url": session.url,
-    }
-
-
-@app.post("/api/billing/webhook")
-async def billing_webhook(request: Request):
-    payload = await request.body()
-    signature = request.headers.get("stripe-signature") or request.headers.get("x-mock-signature", "")
-    try:
-        await _process_webhook(payload, signature)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="invalid webhook") from exc
-    return {"received": True}
-
-
-# ---------------------------------------------------------------------------
-# Admin routes
-# ---------------------------------------------------------------------------
-
-async def _tag_items_background(item_ids: list[int]) -> None:
-    conn = db.get_connection(_db_path)
-    try:
-        for item_id in item_ids:
-            row = conn.execute(
-                "SELECT name, description FROM food_items WHERE id = ?", [item_id]
-            ).fetchone()
-            if row is None:
-                continue
-            try:
-                tags = await asyncio.to_thread(tag_food_item, row["name"], row["description"])
-                db.update_food_item_tags(conn, item_id, tags)
-            except Exception as e:
-                logger.warning("tagging failed for item %d: %s", item_id, e)
-                conn.execute(
-                    "UPDATE food_items SET tagging_status = 'failed' WHERE id = ?", [item_id]
-                )
-                conn.commit()
-    finally:
-        conn.close()
-
-
-def _require_admin(credentials: HTTPAuthorizationCredentials = Depends(_bearer)):
-    admin_token = os.environ.get("CRAVINGS_ADMIN_TOKEN", "")
-    if not admin_token or not hmac.compare_digest(credentials.credentials, admin_token):
-        raise HTTPException(status_code=403, detail="forbidden")
-
-
-def _require_admin_user(user=Depends(_get_user)):
-    if not is_admin_email(user["email"]):
-        raise HTTPException(status_code=403, detail="forbidden")
-    return user
-
-
-@app.post("/api/admin/batch", status_code=202, dependencies=[Depends(_require_admin)])
-async def admin_batch(body: dict):
-    """Insert restaurants + food items and queue async LLM tagging.
-
-    Body: {"restaurants": [{name, location, cuisine_type, source_type}, ...],
-           "food_items":   [{name, description, restaurant_id?}, ...]}
-    """
-    restaurants = body.get("restaurants") or []
-    food_items = body.get("food_items") or []
-
-    conn = db.get_connection(_db_path)
-    try:
-        restaurant_ids: dict[str, int] = {}
-        for r in restaurants:
-            rid = db.insert_restaurant(conn, r)
-            if r.get("name"):
-                restaurant_ids[r["name"]] = rid
-
-        item_ids: list[int] = []
-        for item in food_items:
-            if "restaurant_name" in item and item["restaurant_name"] in restaurant_ids:
-                item = {**item, "restaurant_id": restaurant_ids[item["restaurant_name"]]}
-            fid = db.insert_food_item(conn, item)
-            item_ids.append(fid)
-    finally:
-        conn.close()
-
-    asyncio.create_task(_tag_items_background(item_ids))
-
-    return {
-        "restaurants_inserted": len(restaurants),
-        "food_items_inserted": len(item_ids),
-        "tagging": "queued",
-    }
-
-
-# ---------------------------------------------------------------------------
-# Admin metrics (cross-user aggregates) — admin-user gated (is_admin), JSON only (no UI).
-# Registered users only; "active" = swiped (see db.metrics for caveats).
-# ---------------------------------------------------------------------------
-
-
-@app.get("/api/admin/metrics/foods", dependencies=[Depends(_require_admin_user)])
-async def admin_metrics_foods(
-    min_swipes: int = Query(5, ge=1),
-    limit: int = Query(20, ge=1, le=200),
-    cuisine: str | None = Query(None),
-    conn=Depends(_get_conn),
-):
-    return metrics.food_performance(conn, min_swipes=min_swipes, limit=limit, cuisine=cuisine)
-
-
-@app.get("/api/admin/metrics/catalog", dependencies=[Depends(_require_admin_user)])
-async def admin_metrics_catalog(conn=Depends(_get_conn)):
-    return metrics.catalog_trends(conn)
-
-
-@app.get("/api/admin/metrics/retention", dependencies=[Depends(_require_admin_user)])
-async def admin_metrics_retention(
-    days: int = Query(30, ge=1, le=365),
-    conn=Depends(_get_conn),
-):
-    return metrics.retention(conn, days=days)
-
-
-@app.get("/api/admin/metrics/engagement", dependencies=[Depends(_require_admin_user)])
-async def admin_metrics_engagement(
-    days: int = Query(30, ge=1, le=365),
-    conn=Depends(_get_conn),
-):
-    return metrics.engagement(conn, days=days)
+# Route handlers live in routers/ (users, catalog, auth, billing, admin), split
+# out of this module for size. They read shared state via `main.<attr>` at call
+# time, so lifespan's `global` reassignments above are still visible to them.
+from routers import admin as _admin_router  # noqa: E402
+from routers import auth as _auth_router  # noqa: E402
+from routers import billing as _billing_router  # noqa: E402
+from routers import catalog as _catalog_router  # noqa: E402
+from routers import users as _users_router  # noqa: E402
+
+app.include_router(_users_router.router)
+app.include_router(_catalog_router.router)
+app.include_router(_auth_router.router)
+app.include_router(_billing_router.router)
+app.include_router(_admin_router.router)
 
 
 # ---------------------------------------------------------------------------

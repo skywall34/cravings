@@ -227,6 +227,20 @@ async def test_recommend_session_dedup(auth_client):
     assert resp2.status_code == 404
 
 
+async def test_recommend_honors_excluded_ids_param_for_registered_user(auth_client):
+    """`excluded_ids` must be forwarded for registered users too (MC3).
+
+    GuestRecommender already forwarded it; RegisteredRecommender silently
+    ignored it, so a client-tracked seen-set (e.g. after an in-memory
+    session-store restart wipes the server-side seen-set) couldn't stop a
+    card from repeating."""
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+
+    resp = await client.get(f"/api/recommend?session_id=s2&excluded_ids={item_id}")
+    assert resp.status_code == 404
+
+
 # ---------------------------------------------------------------------------
 # Swipe
 # ---------------------------------------------------------------------------

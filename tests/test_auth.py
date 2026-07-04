@@ -111,13 +111,24 @@ async def test_register_always_fresh_row(client):
 
 
 async def test_register_email_conflict(client):
-    """Second register with same email returns 409."""
+    """Second register with same email doesn't disclose the conflict (M1):
+    same 201 shape, but the returned token is a look-alike that can't
+    authenticate and the original account/password are untouched."""
     payload = {"email": "carol@example.com", "password": "securepass3", "name": "Carol"}
     r1 = await client.post("/api/auth/register", json=payload)
     assert r1.status_code == 201
-    r2 = await client.post("/api/auth/register", json=payload)
-    assert r2.status_code == 409
-    assert "log in" in r2.json()["detail"].lower()
+    r2 = await client.post("/api/auth/register", json={**payload, "password": "differentpass9"})
+    assert r2.status_code == 201
+    assert r2.json()["is_registered"] is True
+    assert r2.json()["api_token"] != r1.json()["api_token"]
+
+    # The look-alike token authenticates nobody.
+    fake_me = await client.get("/api/users/me", headers={"Authorization": f"Bearer {r2.json()['api_token']}"})
+    assert fake_me.status_code == 401
+
+    # Original account's password is untouched by the second "register" attempt.
+    login = await client.post("/api/auth/login", json={"email": "carol@example.com", "password": "securepass3"})
+    assert login.status_code in (200, 403)  # 403 if not yet verified — either way, not a password-changed rejection
 
 
 async def test_register_short_password(client):
@@ -254,6 +265,35 @@ async def test_verify_max_attempts_invalidates_code(client):
         "email": "brute@example.com", "code": real_code,
     })
     assert after.status_code == 400
+
+
+async def test_bump_verification_attempts_atomic_under_concurrency(client):
+    """Concurrent wrong-code guesses can't push attempts past MAX (M3).
+
+    The old read-check-increment was three round-trips, so N concurrent
+    requests could all read the same pre-increment count and slip past the
+    cap together. The guarded `UPDATE ... WHERE attempts < MAX` makes each
+    increment atomic, so the counter can never exceed MAX regardless of
+    how many callers race it.
+    """
+    import concurrent.futures
+
+    await client.post("/api/auth/register", json={
+        "email": "race@example.com", "password": "correcthorse", "name": "R",
+    })
+
+    def _bump():
+        conn = sqlite3.connect(str(main._db_path))
+        conn.row_factory = sqlite3.Row
+        try:
+            return _db.bump_verification_attempts(conn, "race@example.com")
+        finally:
+            conn.close()
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
+        results = list(pool.map(lambda _: _bump(), range(20)))
+
+    assert max(results) <= _db.VERIFICATION_MAX_ATTEMPTS
 
 
 async def test_verify_expired_code(client):
@@ -673,4 +713,26 @@ async def test_rate_limit_ignores_spoofed_xff(client):
         statuses.append(r.status_code)
     # Despite a fresh leftmost IP each call, the fixed rightmost IP shares one
     # bucket → still throttled after the burst.
+    assert 429 in statuses
+
+
+async def test_login_throttle_ignores_email_case(client):
+    """Varying the local-part case must not reset the throttle bucket (M2).
+
+    get_user_by_email lowercases the whole address for lookup, so
+    Foo@x.com and foo@x.com are the same account; the throttle key must
+    normalize the same way or each case variant gets a fresh bucket.
+    """
+    main._auth_limiter.reset()
+    await client.post("/api/auth/register", json={
+        "email": "CaseTest@example.com", "password": "password123", "name": "Case",
+    })
+    statuses = []
+    variants = ["casetest@example.com", "CASETEST@example.com", "CaseTest@example.com",
+                "caseTest@example.com", "CaSeTeSt@example.com", "cASETEST@example.com"]
+    for email in variants:
+        r = await client.post(
+            "/api/auth/login", json={"email": email, "password": "wrongpassword"},
+        )
+        statuses.append(r.status_code)
     assert 429 in statuses
