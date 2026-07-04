@@ -2,14 +2,7 @@ import { useState, useEffect, useCallback, useRef, forwardRef, useImperativeHand
 import type { FoodItem, SwipeDirection } from '../api'
 import { assetUrl } from '../api'
 import { AllergenNote } from './AllergenNote'
-
-const CUISINE_EMOJI: Record<string, string> = {
-  japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
-  american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
-  chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
-  middle_eastern: '🧆', spanish: '🥘', german: '🥨', eastern_european: '🥟',
-  filipino: '🍚', indonesian: '🍛', brazilian: '🥩', caribbean: '🌶️', ethiopian: '🫓',
-}
+import { CUISINE_EMOJI } from '../cuisineEmoji'
 
 const CUISINE_BG: Record<string, string> = {
   japanese: '#FFF1EC', mexican: '#FFF9EC', italian: '#FFF8EC',

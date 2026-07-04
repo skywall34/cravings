@@ -92,19 +92,22 @@ export class RateLimitError extends Error {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const opts: RequestInit = {
+async function request<T>(
+  method: string, path: string, body?: unknown, opts: { auth?: boolean } = {},
+): Promise<T> {
+  const { auth = true } = opts
+  const fetchOpts: RequestInit = {
     method,
-    headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
+    headers: { 'Content-Type': 'application/json', ...(auth ? await authHeaders() : {}) },
   }
-  if (body !== undefined) opts.body = JSON.stringify(body)
-  const res = await fetch(apiBase() + path, opts)
-  if (res.status === 401 && (await getToken())) {
+  if (body !== undefined) fetchOpts.body = JSON.stringify(body)
+  const res = await fetch(apiBase() + path, fetchOpts)
+  if (auth && res.status === 401 && (await getToken())) {
     await recoverFromInvalidToken()
     throw new Error('session expired, reloading')
   }
   if (res.status === 204) return undefined as T
-  let data: unknown = null
+  let data: unknown
   try {
     data = await res.json()
   } catch {
@@ -125,7 +128,7 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   if (!res.ok) {
     const errMsg =
       data !== null && typeof data === 'object' && 'detail' in data
-        ? String((data as { detail: unknown }).detail)
+        ? String(data.detail)
         : `HTTP ${res.status}`
     throw new Error(errMsg)
   }
@@ -171,31 +174,8 @@ export interface SwipeStats {
   flavor_profile: Record<string, number>
 }
 
-export async function ensureUser(): Promise<void> {
-  // No-op for guests — DB row created only on registration
-  if (await getToken()) return
-}
-
 export async function getMe(): Promise<UserInfo> {
   return request<UserInfo>('GET', '/api/users/me')
-}
-
-async function requestNoAuth<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const opts: RequestInit = {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-  }
-  if (body !== undefined) opts.body = JSON.stringify(body)
-  const res = await fetch(apiBase() + path, opts)
-  const data: unknown = await res.json()
-  if (!res.ok) {
-    const errMsg =
-      data !== null && typeof data === 'object' && 'detail' in data
-        ? String((data as { detail: unknown }).detail)
-        : `HTTP ${res.status}`
-    throw new Error(errMsg)
-  }
-  return data as T
 }
 
 // Registration no longer starts a session: the account is created unverified
@@ -207,13 +187,13 @@ export async function register(email: string, password: string, name?: string): 
 
 // Confirm the 6-digit code. On success this is where the real session begins.
 export async function verifyEmail(email: string, code: string): Promise<AuthResult> {
-  const result = await requestNoAuth<AuthResult>('POST', '/api/auth/verify-email', { email, code })
+  const result = await request<AuthResult>('POST', '/api/auth/verify-email', { email, code }, { auth: false })
   await setToken(result.api_token)
   return result
 }
 
 export async function resendVerification(email: string): Promise<void> {
-  await requestNoAuth('POST', '/api/auth/resend-verification', { email })
+  await request('POST', '/api/auth/resend-verification', { email }, { auth: false })
 }
 
 // Thrown by login() when the account exists but hasn't verified its email yet,
@@ -230,7 +210,7 @@ export class EmailNotVerifiedError extends Error {
 export async function login(email: string, password: string): Promise<AuthResult> {
   let result: AuthResult
   try {
-    result = await requestNoAuth<AuthResult>('POST', '/api/auth/login', { email, password })
+    result = await request<AuthResult>('POST', '/api/auth/login', { email, password }, { auth: false })
   } catch (err) {
     // The server returns 403 "please verify your email" for an unverified
     // account — surface it as a typed error so the UI can open the verify step.

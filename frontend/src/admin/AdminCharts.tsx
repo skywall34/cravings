@@ -1,5 +1,8 @@
 import React from 'react'
 import type { AdminDim, AdminFoodMetric, AdminRetentionMetrics, AdminEngagementMetrics } from '../api'
+import { hexToRgba as adminHexToRgba, shiftHex as adminShift } from '../colorUtils'
+import { CUISINE_EMOJI as ADMIN_CUISINE_EMOJI } from '../cuisineEmoji'
+import { prettyKey, fmtDate } from './adminFormat'
 
 // ── Design tokens ────────────────────────────────────────────────────────────
 const ACCENT = '#E85D04'
@@ -9,43 +12,7 @@ const CARD_BG = '#FAFAF8'
 const BORDER = '#F0E8E0'
 const TRACK = '#EEE7DF'
 
-export const ADMIN_CUISINE_EMOJI: Record<string, string> = {
-  thai: '🍜', japanese: '🍣', italian: '🍝', mexican: '🌮',
-  korean: '🍲', vietnamese: '🍲', indian: '🍛', mediterranean: '🥙',
-  chinese: '🥡', american: '🍔', french: '🥐', greek: '🫒',
-  spanish: '🥘', german: '🥨', eastern_european: '🥟', filipino: '🍚',
-  indonesian: '🍛', brazilian: '🥩', caribbean: '🌴', ethiopian: '🫓',
-}
-
-export const ATTR_LABELS: Record<string, string> = {
-  spice_level: 'Spice', richness: 'Richness', dairy_content: 'Dairy',
-  sauce_heaviness: 'Sauce', texture_softness: 'Softness', savory_umami: 'Umami',
-  veggie_density: 'Veggie', sweetness: 'Sweet',
-}
-
-export function prettyKey(k: string): string {
-  return ATTR_LABELS[k] ?? k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
-}
-
-// helpers
-export function adminHexToRgba(hex: string, a: number): string {
-  const h = hex.replace('#', '')
-  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
-}
-
-export function adminShift(hex: string, amt: number): string {
-  const h = hex.replace('#', '')
-  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
-  const clamp = (v: number) => Math.max(0, Math.min(255, v))
-  const r = clamp(((n >> 16) & 255) + amt), g = clamp(((n >> 8) & 255) + amt), b = clamp((n & 255) + amt)
-  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`
-}
-
-export function fmtDate(iso: string): string {
-  const d = new Date(iso)
-  return `${d.getMonth() + 1}/${d.getDate()}`
-}
+export { ADMIN_CUISINE_EMOJI }
 
 // ── Panel wrapper ────────────────────────────────────────────────────────────
 export function Panel({ title, children, fullWidth }: { title: string; children: React.ReactNode; fullWidth?: boolean }) {

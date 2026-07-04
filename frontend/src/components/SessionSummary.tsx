@@ -1,12 +1,7 @@
 import type { SwipeEntry } from '../recommender/recommender'
+import { CUISINE_EMOJI } from '../cuisineEmoji'
 
 export type { SwipeEntry }
-
-const CUISINE_EMOJI: Record<string, string> = {
-  japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
-  american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
-  chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
-}
 
 interface SessionSummaryProps {
   swipeHistory: SwipeEntry[]

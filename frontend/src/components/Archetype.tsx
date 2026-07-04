@@ -1,5 +1,8 @@
 // Archetype.tsx — The 5-axis Taste Archetype framework (paid-tier foundation).
 /* eslint-disable react-refresh/only-export-components */
+import { hexToRgba as archHex, shiftHex as archShift } from '../colorUtils'
+
+export { archHex, archShift }
 
 // ── Types ─────────────────────────────────────────────────────────────
 export type AxisKey = 'Heat' | 'Indulgence' | 'Texture' | 'Adventure' | 'Tempo'
@@ -64,21 +67,6 @@ export function deriveArchetypeAt(windowIndex: number, series: Record<AxisKey, n
   const axes = {} as AxesMap
   AXIS_KEYS.forEach(k => { axes[k] = series[k][windowIndex] })
   return deriveArchetype(axes)
-}
-
-// ── Color helpers ─────────────────────────────────────────────────────
-export function archHex(hex: string, a: number): string {
-  const h = hex.replace('#', '')
-  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
-  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${a})`
-}
-
-export function archShift(hex: string, amt: number): string {
-  const h = hex.replace('#', '')
-  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16)
-  const cl = (v: number) => Math.max(0, Math.min(255, v))
-  const r = cl(((n >> 16) & 255) + amt), g = cl(((n >> 8) & 255) + amt), b = cl((n & 255) + amt)
-  return `#${((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1)}`
 }
 
 // ── Palette (light mode, hardcoded) ──────────────────────────────────

@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { fetchStats, changePassword, deleteAccount, exportData } from '../api'
 import * as storage from '../storage'
 import type { UserInfo, SwipeStats } from '../api'
-import { deriveTasteProfile, YesRateGauge, CuisineAffinity, PeakTimesChart } from './StatsCharts'
+import { YesRateGauge, CuisineAffinity, PeakTimesChart } from './StatsCharts'
+import { deriveTasteProfile } from '../tasteProfile'
 import { deriveArchetype, PremiumBadge, type AxesMap } from './Archetype'
 
 const BALANCED_AXES: AxesMap = { Heat: 50, Indulgence: 50, Texture: 50, Adventure: 50, Tempo: 50 }

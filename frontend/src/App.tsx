@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { ensureUser, getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError, effectivePremium } from './api'
+import { getMe, getNearby, logout, getToken, patchDietaryRestrictions, setSessionExpiredHandler, RateLimitError, effectivePremium } from './api'
 import type { FoodItem, Restaurant, SwipeDirection, UserInfo, GuestPrefs } from './api'
 import * as storage from './storage'
 import { useLocation } from './hooks/useLocation'
@@ -144,13 +144,23 @@ export default function App() {
     void storage.get('cravings_consent').then(v => { if (v) setConsentDismissed(true) })
   }, [])
 
+  const refetchingUserRef = useRef(false)
+
   useEffect(() => {
     // Refetch user on resume from background so webhook-granted premium reflects.
+    // Desktop tab-switch fires both 'visibilitychange' and 'focus' together;
+    // the in-flight guard collapses that pair into a single getMe() call.
     async function onVisible() {
+      if (refetchingUserRef.current) return
       const token = await getToken()
       if (!token) return
-      const me = await getMe()
-      setCurrentUser(me)
+      refetchingUserRef.current = true
+      try {
+        const me = await getMe()
+        setCurrentUser(me)
+      } finally {
+        refetchingUserRef.current = false
+      }
     }
     const onVisibilityChange = () => { if (document.visibilityState === 'visible') void onVisible() }
     const onFocus = () => void onVisible()
@@ -167,7 +177,6 @@ export default function App() {
       try {
         const storedDietary = await loadDietaryFromStorage()
         setGuestDietary(storedDietary)
-        await ensureUser()
         const token = await getToken()
         if (token) {
           const me = await getMe()
@@ -432,7 +441,7 @@ export default function App() {
         </div>
       )}
 
-      {screen !== 'login' && screen !== 'register' && screen !== 'profile' && screen === 'swipe' && (
+      {screen === 'swipe' && (
         <>
           <SessionProgress count={swipeCount} total={SESSION_MAX} />
           {error && <p className="error-msg">{error}</p>}
@@ -442,7 +451,7 @@ export default function App() {
                 <SwipeCard
                   ref={swipeCardRef}
                   food={food}
-                  onSwipe={handleSwipe}
+                  onSwipe={d => void handleSwipe(d)}
                   disabled={swiping || loading}
                   swipeCount={swipeCount}
                   totalSwipes={SESSION_MAX}

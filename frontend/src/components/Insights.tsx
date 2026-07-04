@@ -40,7 +40,7 @@ function DriftChart({ drift }: { drift: InsightsDrift }) {
           <text key={w} x={x(i)} y={H - 7} textAnchor="middle" fontSize="10" fontWeight="700" fill={TEXT_SUB} style={{ fontFamily: 'inherit' }}>{w}</text>
         ))}
         {AXIS_KEYS.map(k => {
-          const vals = (series[k] ?? []) as number[]
+          const vals = series[k] ?? []
           if (!vals.length) return null
           const pts = vals.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`)
           const d = 'M' + pts.join(' L')
@@ -89,7 +89,7 @@ function DriftDeltas({ drift, axes, topCuisines }: {
 }) {
   const { series, windows } = drift
   const deltas = AXIS_KEYS.map(k => {
-    const s = (series[k] ?? []) as number[]
+    const s = series[k] ?? []
     return { k, delta: s.length >= 2 ? s[s.length - 1] - s[0] : 0 }
   }).sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))
   const cardBg = '#FFFFFF'
@@ -183,7 +183,7 @@ function MonthlyRecap({ axes, drift, recap, month }: {
 }) {
   const currentMonth = month ?? new Date().toLocaleString('default', { month: 'long' })
   const now = deriveArchetype(axes)
-  const top = drift ? deriveArchetypeAt(0, drift.series as Record<AxisKey, number[]>) : now
+  const top = drift ? deriveArchetypeAt(0, drift.series) : now
   const grad = `linear-gradient(165deg, ${archShift(ACCENT, 8)} 0%, ${archShift(ACCENT, -34)} 62%, ${archShift(ACCENT, -54)} 100%)`
 
   const biggestMoverLabel = recap.biggest_mover
@@ -322,6 +322,10 @@ export function InsightsScreen({ isPremium, onBack, onUpgrade }: InsightsScreenP
 
   useEffect(() => {
     if (!isPremium) return
+    // Standard fetch-on-mount loading indicator (React docs' own data-fetching
+    // effect example does the same) — not the "derived state" case the rule
+    // is meant to catch.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoading(true)
     fetchInsights()
       .then(setInsights)
@@ -451,7 +455,7 @@ export function InsightsScreen({ isPremium, onBack, onUpgrade }: InsightsScreenP
             </div>
             {isPremium && canShare && (
               <button
-                onClick={handleShare}
+                onClick={() => void handleShare()}
                 style={{
                   width: '100%', maxWidth: 320, margin: '16px auto 0', display: 'flex',
                   alignItems: 'center', justifyContent: 'center', gap: 8,

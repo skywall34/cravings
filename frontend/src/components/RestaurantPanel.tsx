@@ -1,13 +1,6 @@
 import type { FoodItem, Restaurant } from '../api'
 import { AllergenNote } from './AllergenNote'
-
-const CUISINE_EMOJI: Record<string, string> = {
-  japanese: '🍣', mexican: '🌮', italian: '🍕', indian: '🥘',
-  american: '🍔', thai: '🦐', korean: '🥩', mediterranean: '🥗',
-  chinese: '🥡', french: '🥐', vietnamese: '🍜', greek: '🫒',
-  middle_eastern: '🧆', spanish: '🥘', german: '🥨', eastern_european: '🥟',
-  filipino: '🍚', indonesian: '🍛', brazilian: '🥩', caribbean: '🌶️', ethiopian: '🫓',
-}
+import { CUISINE_EMOJI } from '../cuisineEmoji'
 
 interface StarRatingProps {
   rating: number
@@ -19,7 +12,7 @@ function StarRating({ rating }: StarRatingProps) {
   const half = rating % 1 >= 0.5
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 2 }}>
-      {[...Array(5)].map((_, i) => (
+      {Array.from({ length: 5 }).map((_, i) => (
         <span key={i} style={{
           color: i < full ? '#F48C06' : (i === full && half ? '#F48C06' : '#E8E0D8'),
           fontSize: '0.95rem',
