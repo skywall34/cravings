@@ -69,6 +69,8 @@ from db.food import (
     update_food_item_judgement,
     update_food_item_embedding,
     update_food_item_tags,
+    mark_food_item_tagging_failed,
+    clear_eligible_cache,
 )
 from db.swipe_events import (
     record_swipe,
@@ -104,6 +106,7 @@ __all__ = [
     "get_items_without_image", "get_items_for_judging", "get_rejected_items",
     "update_food_item_image", "update_food_item_judgement",
     "update_food_item_embedding", "update_food_item_tags",
+    "mark_food_item_tagging_failed", "clear_eligible_cache",
     # swipe_events
     "record_swipe", "recent_rejection_rate", "days_since_last_swipe",
     "get_swiped_cuisines", "get_swipe_stats", "get_insights",

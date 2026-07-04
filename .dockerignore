@@ -16,3 +16,7 @@ __pycache__
 docs
 tests
 *.zip
+# Prod reads food images from the rsync'd volume mount, not the image (see
+# project_vps_image_state) — the ~89MB dir was busting the COPY layer on
+# every source edit for nothing. mkdir -p in the Dockerfile makes the mount point.
+images

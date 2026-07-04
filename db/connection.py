@@ -30,6 +30,8 @@ def init_db(db_path: Path = DEFAULT_DB_PATH) -> sqlite3.Connection:
     schema_sql = SCHEMA_PATH.read_text()
     conn.executescript(schema_sql)
     _migrate(conn)
+    from db.food import clear_eligible_cache
+    clear_eligible_cache()
     return conn
 
 

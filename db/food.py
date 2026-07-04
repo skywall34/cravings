@@ -2,6 +2,7 @@
 
 import json
 import sqlite3
+import time
 
 from tagging.safety import build_dietary_filter_clauses
 
@@ -34,6 +35,7 @@ def insert_food_item(conn: sqlite3.Connection, item: dict) -> int:
         list(present.values()),
     )
     conn.commit()
+    clear_eligible_cache()
     return cursor.lastrowid
 
 
@@ -83,30 +85,64 @@ def get_untagged_items(conn: sqlite3.Connection) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+# Per-(safety_mask, dietary_restrictions) cache of the eligible-items scan —
+# the catalog is static after seed/tagging, so re-scanning + re-parsing the
+# embedding BLOB for the whole table on every single /api/recommend call is
+# pure waste. exclude_ids varies per call, so it's applied in Python against
+# the cached rows rather than being part of the cache key. Bounded TTL (not a
+# write-invalidated cache) so an in-flight tagging job's changes still show
+# up within a few seconds — a stale-safety window measured in seconds is an
+# acceptable, explicit tradeoff for a catalog that changes rarely.
+_ELIGIBLE_CACHE: dict[tuple, tuple[float, list[dict]]] = {}
+_ELIGIBLE_CACHE_TTL_SECONDS = 5.0
+
+
+def clear_eligible_cache() -> None:
+    """Drop the cached eligibility scans — called on (re)init so a fresh/reseeded
+    DB (incl. test suites reusing one process) never serves stale rows."""
+    _ELIGIBLE_CACHE.clear()
+
+
+def _eligibility_clauses(
+    safety_mask: int, dietary_restrictions: list[str]
+) -> tuple[list[str], list]:
+    """Shared safety-filter contract: tagged only, safety_risk_bitmask excludes
+    the caller's mask, dietary restrictions honored. Single source for
+    `get_eligible_food_items` and `get_popular_food_items` so a rule change
+    can't be applied to only one path and leak an unsafe item to the other."""
+    clauses = ["tagging_status = 'tagged'", "(safety_risk_bitmask & ?) = 0"]
+    args: list = [safety_mask]
+    diet_clauses, diet_args = build_dietary_filter_clauses(dietary_restrictions)
+    clauses.extend(diet_clauses)
+    args.extend(diet_args)
+    return clauses, args
+
+
 def get_eligible_food_items(
     conn: sqlite3.Connection,
     safety_mask: int,
     dietary_restrictions: list[str],
     exclude_ids: list[int] | None = None,
 ) -> list[dict]:
-    clauses = ["tagging_status = 'tagged'", "(safety_risk_bitmask & ?) = 0"]
-    args: list = [safety_mask]
+    cache_key = (safety_mask, tuple(sorted(dietary_restrictions)))
+    now = time.monotonic()
+    cached = _ELIGIBLE_CACHE.get(cache_key)
+    if cached is not None and now - cached[0] < _ELIGIBLE_CACHE_TTL_SECONDS:
+        rows = cached[1]
+    else:
+        clauses, args = _eligibility_clauses(safety_mask, dietary_restrictions)
 
-    diet_clauses, diet_args = build_dietary_filter_clauses(dietary_restrictions)
-    clauses.extend(diet_clauses)
-    args.extend(diet_args)
+        query = (
+            f"SELECT {_FOOD_ITEM_COLS_WITH_EMBEDDING} "
+            "FROM food_items WHERE " + " AND ".join(clauses)
+        )
+        rows = [dict(r) for r in conn.execute(query, args).fetchall()]
+        _ELIGIBLE_CACHE[cache_key] = (now, rows)
 
     if exclude_ids:
-        placeholders = ",".join("?" * len(exclude_ids))
-        clauses.append(f"id NOT IN ({placeholders})")
-        args.extend(exclude_ids)
-
-    query = (
-        f"SELECT {_FOOD_ITEM_COLS_WITH_EMBEDDING} "
-        "FROM food_items WHERE " + " AND ".join(clauses)
-    )
-    rows = conn.execute(query, args).fetchall()
-    return [dict(r) for r in rows]
+        excl = set(exclude_ids)
+        rows = [r for r in rows if r["id"] not in excl]
+    return rows
 
 
 def get_food_item(conn: sqlite3.Connection, item_id: int) -> dict | None:
@@ -132,12 +168,7 @@ def get_popular_food_items(
     limit: int = 10,
 ) -> list[dict]:
     """Rank food items by aggregate right-swipe rate across all users. Guest recommendations."""
-    clauses = ["tagging_status = 'tagged'", "(safety_risk_bitmask & ?) = 0"]
-    args: list = [safety_mask]
-
-    diet_clauses, diet_args = build_dietary_filter_clauses(dietary_restrictions)
-    clauses.extend(diet_clauses)
-    args.extend(diet_args)
+    clauses, args = _eligibility_clauses(safety_mask, dietary_restrictions)
 
     if exclude_ids:
         placeholders = ",".join("?" * len(exclude_ids))
@@ -322,3 +353,10 @@ def update_food_item_tags(conn: sqlite3.Connection, item_id: int, tags: dict) ->
         [*present.values(), item_id],
     )
     conn.commit()
+    clear_eligible_cache()  # tagging_status/safety_risk_bitmask changed — no stale window
+
+
+def mark_food_item_tagging_failed(conn: sqlite3.Connection, item_id: int) -> None:
+    conn.execute("UPDATE food_items SET tagging_status = 'failed' WHERE id = ?", [item_id])
+    conn.commit()
+    clear_eligible_cache()  # a failed item must stop being eligible immediately
