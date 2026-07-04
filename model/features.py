@@ -88,9 +88,12 @@ class FeatureSchema:
 def encode_food_item(item: dict) -> np.ndarray:
     """Convert food item dict (from DB row) to feature vector."""
     continuous = np.array([float(item.get(attr, 0.0) or 0.0) for attr in CONTINUOUS_ATTRS])
-    protein = one_hot(item.get("protein_type", "none"), PROTEIN_TYPES)
-    cuisine = one_hot(item.get("cuisine_type", "other"), CUISINE_TYPES)
-    carb = one_hot(item.get("carb_base", "none"), CARB_BASES)
+    # `or default` (not `.get(k, default)`): a DB row always carries the key, so a
+    # NULL column surfaces as an explicit None that the get-default never catches —
+    # one_hot(None) would then 500 the whole recommend request.
+    protein = one_hot(item.get("protein_type") or "none", PROTEIN_TYPES)
+    cuisine = one_hot(item.get("cuisine_type") or "other", CUISINE_TYPES)
+    carb = one_hot(item.get("carb_base") or "none", CARB_BASES)
     return np.concatenate([continuous, protein, cuisine, carb])
 
 

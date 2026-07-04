@@ -65,6 +65,18 @@ class TestEncodeFoodItem:
         assert vec[0] == 0.0
         assert vec[1] == 0.0
 
+    def test_none_categoricals_handled(self):
+        # H2: a tagged DB row can carry NULL protein_type/cuisine_type/carb_base,
+        # which arrives as an explicit None (key present) — must fall back to the
+        # default one-hot, not raise ValueError and 500 the recommend request.
+        item = {"protein_type": None, "cuisine_type": None, "carb_base": None}
+        vec = encode_food_item(item)
+        assert len(vec) == FOOD_DIM
+        # protein "none" and carb "none" are the last category in their blocks.
+        n_cont = len(CONTINUOUS_ATTRS)
+        assert vec[n_cont + len(PROTEIN_TYPES) - 1] == 1.0  # protein → none
+        assert vec[-1] == 1.0  # carb → none
+
 
 class TestEncodeContext:
     def test_output_dimension(self):

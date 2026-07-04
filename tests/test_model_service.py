@@ -127,6 +127,99 @@ class TestModelServer:
         status = svc2.get_status(uid)
         assert status["total_swipes"] == 1
 
+    def test_similarity_boost_applied_with_liked_embeddings(self, service, db_with_user):
+        """A right-swiped item with an embedding feeds the liked-centroid boost
+        on the next recommend() call (_boost_with_similarity / _get_liked_embeddings)."""
+        import numpy as np
+        from db.database import db_connection, insert_food_item, update_food_item_embedding
+
+        db_path, uid = db_with_user
+        liked_emb = np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32).tobytes()
+        similar_emb = np.array([0.9, 0.1, 0.0, 0.0], dtype=np.float32).tobytes()
+        with db_connection(db_path) as conn:
+            liked_id = insert_food_item(conn, {"name": "Liked", "description": "", "tagging_status": "tagged"})
+            update_food_item_embedding(conn, liked_id, liked_emb)
+
+        ctx = {"hour": 12.0}
+        # Right-swipe pushes this item onto the user's recent-likes list.
+        service.record_swipe(uid, make_item_dict(id=liked_id, name="Liked"), ctx, reward=1)
+
+        candidates = [
+            make_item_dict(id=liked_id + 1, name="Similar", embedding=similar_emb),
+            make_item_dict(id=liked_id + 2, name="NoEmbedding", embedding=None),
+        ]
+        results = service.recommend(uid, candidates, ctx, top_n=2)
+        assert len(results) == 2
+        assert {r["id"] for r in results} == {liked_id + 1, liked_id + 2}
+
+    def test_apply_decay_runs_and_persists_after_interval(self, service, db_with_user):
+        """apply_decay() only actually decays (and persists) once the min interval
+        has elapsed — force last_decay_ts into the past to hit that branch."""
+        import time as _time
+
+        _, uid = db_with_user
+        model = service.store.get(uid)
+        model.last_decay_ts = _time.time() - 7 * 3600  # past the 6h min interval
+        assert service.apply_decay(uid) is True
+        # Too soon immediately after — idempotent within the interval.
+        assert service.apply_decay(uid) is False
+
+    def test_long_tail_injection_at_multiple_of_7_past_20(self, service, db_with_user):
+        """At total_swipes == 21 (>= 20 and a multiple of 7), the least-impressed
+        candidate is forced to rank 1 (`_thompson_recommend`'s long-tail branch)."""
+        db_path, uid = db_with_user
+        ctx = {"hour": 12.0}
+        item = make_item_dict()
+        for _ in range(21):
+            service.record_swipe(uid, item, ctx, reward=1)
+        assert service.get_status(uid)["total_swipes"] == 21
+
+        candidates = [make_item_dict(id=i) for i in range(1, 6)]
+        # Give every candidate but #3 lots of impressions, so #3 is least-impressed
+        # and must be forced to rank 1 regardless of its Thompson score. The FK on
+        # user_item_impressions needs real food_items rows for ids 1-5 first.
+        from db.database import db_connection, record_impression
+        with db_connection(db_path) as conn:
+            for c in candidates:
+                _insert_item_with_cuisine(conn, c["id"], "indian")
+            for cid in (1, 2, 4, 5):
+                for _ in range(5):
+                    record_impression(conn, uid, cid)
+
+        # Cold-start stratification only ends once every eligible cuisine has been
+        # swiped; force the normal Thompson path (where long-tail injection lives)
+        # by reporting "indian" as already covered.
+        results = service.recommend(uid, candidates, ctx, top_n=3, swiped_cuisines={"indian"})
+        assert len(results) == 3
+        assert results[0]["id"] == 3
+
+    def test_recommend_survives_db_failures(self, service, db_with_user, monkeypatch):
+        """record_impression/get_least_impressed failures must not crash recommend()
+        — they're best-effort side channels, logged and swallowed."""
+        import model_server.recommendation_service as rs
+
+        def _boom(*a, **kw):
+            raise RuntimeError("db down")
+
+        monkeypatch.setattr(rs, "record_impression", _boom)
+        monkeypatch.setattr(rs, "get_least_impressed", _boom)
+
+        _, uid = db_with_user
+        candidates = [make_item_dict(id=i) for i in range(1, 4)]
+        ctx = {"hour": 12.0}
+        results = service.recommend(uid, candidates, ctx, top_n=2)
+        assert len(results) == 2
+
+    def test_record_swipe_survives_persist_failure(self, service, db_with_user, monkeypatch):
+        """A persist() failure must not crash record_swipe() — total_swipes is
+        already updated in memory and returned regardless."""
+        monkeypatch.setattr(service.store, "persist", lambda uid: (_ for _ in ()).throw(RuntimeError("disk full")))
+        _, uid = db_with_user
+        item = make_item_dict()
+        ctx = {"hour": 12.0}
+        total = service.record_swipe(uid, item, ctx, reward=1)
+        assert total == 1
+
     def test_stale_dim_blob_self_heals(self, db_with_user):
         """A blob from a smaller feature dim (e.g. pre cuisine-enum expansion)
         must reset to a fresh prior at the current dim instead of crashing scoring."""

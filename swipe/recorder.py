@@ -9,7 +9,7 @@ import sqlite3
 
 import db.database as db
 from swipe.session import SessionStore
-from swipe.snapshot import Snapshot
+from swipe.snapshot import Snapshot, check_item as snapshot_check_item
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,9 @@ async def record_swipe(
     reward = reward_for_direction(direction)
     if snapshot.user_id != user["id"]:
         raise SwipeError("snapshot user mismatch")
+    # The swiped item must be one this token actually recommended (H1) — blocks
+    # training μ/B on a safety-filtered or arbitrary item the client names.
+    snapshot_check_item(snapshot, item["id"])
 
     total = await asyncio.to_thread(
         model_service.record_swipe, user["id"], item, snapshot.to_context(), reward

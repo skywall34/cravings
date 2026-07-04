@@ -74,7 +74,8 @@ class RegisteredRecommender:
 
     async def recommend(self, *, hour, top_n, excluded_ids) -> list[dict]:
         snapshot, candidates = await swipe.build_intake(
-            self._conn, self._sessions, self._user, hour, self._session_id
+            self._conn, self._sessions, self._user, hour, self._session_id,
+            extra_excluded=excluded_ids,
         )
         if not candidates:
             return []
@@ -159,6 +160,7 @@ class GuestRecommender:
 
     async def record(self, *, item, direction, token) -> dict:
         snapshot = swipe.verify_guest(token, self._session_id)
+        swipe.check_item(snapshot, item["id"])  # swipe must target a served item (H1)
         await self._sessions.mark(self._session_id, item["id"])
         seen = await self._sessions.count(self._session_id)
         model = await self._ensure_model()

@@ -7,7 +7,7 @@ Owns the full contract of a Swipe Session:
   intake.py      — candidate filtering, response shaping, image URL construction
 """
 
-from swipe.snapshot import Snapshot, capture, capture_guest, seal, verify, verify_guest, SnapshotError
+from swipe.snapshot import Snapshot, capture, capture_guest, seal, verify, verify_guest, check_item, SnapshotError
 from swipe.session import SessionStore
 from swipe.recorder import record_swipe, reward_for_direction, SwipeError
 from swipe.intake import build_intake, build_guest_intake, shape_results, add_image_urls
@@ -20,6 +20,7 @@ __all__ = [
     "seal",
     "verify",
     "verify_guest",
+    "check_item",
     "record_swipe",
     "reward_for_direction",
     "SwipeError",

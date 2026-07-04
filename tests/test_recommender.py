@@ -2,6 +2,8 @@
 the guest/registered branches out of the routes. These exercise GuestRecommender
 without the HTTP stack, and lock the reward policy that used to drift between paths."""
 
+from dataclasses import replace
+
 import pytest
 
 import swipe
@@ -26,6 +28,11 @@ class _SpyModel:
 
 def _guest_token(session_id: str) -> str:
     return seal(capture_guest(session_id, None))
+
+
+def _guest_token_bound(session_id: str, ids: list[int]) -> str:
+    """Token bound to a specific served-item set, like intake.shape_results issues."""
+    return seal(replace(capture_guest(session_id, None), item_ids=tuple(ids)))
 
 
 def _guest(sessions: SessionStore, session_id: str) -> GuestRecommender:
@@ -119,6 +126,35 @@ async def test_guest_record_rejects_mismatched_session():
     rec = _guest(sessions, "s1")
     with pytest.raises(swipe.SnapshotError):
         await rec.record(item={"id": 1}, direction="right", token=_guest_token("other"))
+
+
+# ── H1: swipe must target an item the token actually recommended ─────────────
+
+@pytest.mark.asyncio
+async def test_guest_record_rejects_unserved_item():
+    """A token bound to served ids [7, 8] must reject a swipe on any other id, so
+    the model can't be trained on an arbitrary (possibly filtered) item."""
+    sessions = SessionStore()
+    model = _SpyModel()
+    await sessions.set_model("s1", model)
+    rec = _guest(sessions, "s1")
+
+    with pytest.raises(swipe.SnapshotError):
+        await rec.record(item={"id": 999}, direction="right",
+                         token=_guest_token_bound("s1", [7, 8]))
+    assert model.rewards == []  # never trained on the unserved item
+
+
+@pytest.mark.asyncio
+async def test_guest_record_accepts_served_item():
+    sessions = SessionStore()
+    model = _SpyModel()
+    await sessions.set_model("s1", model)
+    rec = _guest(sessions, "s1")
+
+    await rec.record(item={"id": 7}, direction="right",
+                     token=_guest_token_bound("s1", [7, 8]))
+    assert model.rewards == [1.0]
 
 
 # ── factory resolves identity once ──────────────────────────────────────────

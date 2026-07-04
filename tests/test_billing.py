@@ -66,9 +66,9 @@ async def auth_client(client):
 # Unit: MockProvider
 # ---------------------------------------------------------------------------
 
-def test_mock_provider_session_shape():
+async def test_mock_provider_session_shape():
     provider = MockProvider("secret")
-    session = provider.create_checkout_session({"id": 1}, 499)
+    session = await provider.create_checkout_session({"id": 1}, 499)
     assert session.session_id.startswith("mock_cs_")
     assert session.amount_cents == 499
     assert session.provider == "mock"
@@ -260,6 +260,132 @@ async def test_webhook_bad_sig_rejected(auth_client):
 
     me = (await client.get("/api/users/me")).json()
     assert me["is_premium"] is False
+
+
+@pytest.mark.asyncio
+async def test_webhook_grants_to_session_owner_not_payload(auth_client):
+    """C2: a webhook whose payload metadata targets a *different* user must
+    upgrade the session owner (or nobody), never the attacker-named victim."""
+    client, _, owner_id = auth_client
+    resp = await client.post("/api/billing/checkout")
+    session_id = resp.json()["session_id"]
+
+    # Register a second account — the "victim" the attacker names in the payload.
+    victim = await client.post("/api/auth/register", json={
+        "email": "victim@example.com", "password": "securepass1", "name": "Victim",
+    })
+    victim_id = victim.json()["id"]
+    assert victim_id != owner_id
+
+    # Forge a validly-signed webhook for the owner's session but pointing the
+    # metadata user_id at the victim.
+    payload, sig = _make_webhook(session_id, victim_id)
+    wresp = await client.post(
+        "/api/billing/webhook",
+        content=payload,
+        headers={"x-mock-signature": sig, "content-type": "application/json"},
+    )
+    assert wresp.status_code == 200
+
+    # Victim must NOT be upgraded; the session owner is the one who gets premium.
+    with _db.db_connection(Path(TEST_DB)) as conn:
+        assert _db.get_user(conn, victim_id)["is_premium"] == 0
+        assert _db.get_user(conn, owner_id)["is_premium"] == 1
+
+
+def test_mock_secret_not_hardcoded_default(monkeypatch):
+    """C1: with no explicit secret, the mock provider must not accept a webhook
+    signed with the old hardcoded 'dev-mock-secret' (random per-process secret)."""
+    from billing import make_payment_provider
+    monkeypatch.delenv("CRAVINGS_BILLING_WEBHOOK_SECRET", raising=False)
+    monkeypatch.delenv("CRAVINGS_BILLING_PROVIDER", raising=False)
+    provider = make_payment_provider()
+    payload = json.dumps({
+        "type": "checkout.session.completed",
+        "data": {"object": {"id": "mock_cs_x", "metadata": {"user_id": "1"}}},
+    }).encode()
+    forged = _hmac_sign(payload, "dev-mock-secret")
+    with pytest.raises(ValueError):
+        provider.verify_and_parse_webhook(payload, forged)
+
+
+# ---------------------------------------------------------------------------
+# StripeProvider (stubbed stripe SDK — no network, no real keys)
+# ---------------------------------------------------------------------------
+
+class _FakeSession:
+    def __init__(self, id: str, url: str) -> None:
+        self.id = id
+        self.url = url
+
+
+async def test_stripe_provider_create_checkout_session(monkeypatch):
+    import stripe
+    from billing import StripeProvider
+
+    captured = {}
+
+    def fake_create(**kwargs):
+        captured.update(kwargs)
+        return _FakeSession(id="cs_test_123", url="https://checkout.stripe.com/cs_test_123")
+
+    monkeypatch.setattr(stripe.checkout.Session, "create", staticmethod(fake_create))
+
+    provider = StripeProvider(
+        secret_key="sk_test_x", webhook_secret="whsec_x",
+        success_url="https://example.com/success", cancel_url="https://example.com/cancel",
+    )
+    session = await provider.create_checkout_session({"id": 42}, 499)
+
+    assert session.session_id == "cs_test_123"
+    assert session.amount_cents == 499
+    assert session.provider == "stripe"
+    assert session.url == "https://checkout.stripe.com/cs_test_123"
+    assert captured["metadata"] == {"user_id": "42"}
+    assert captured["client_reference_id"] == "42"
+    assert captured["line_items"][0]["price_data"]["unit_amount"] == 499
+
+
+async def test_stripe_provider_verify_and_parse_webhook(monkeypatch):
+    import stripe
+    from billing import StripeProvider
+
+    fake_event = {
+        "type": "checkout.session.completed",
+        "data": {"object": {"id": "cs_test_456", "metadata": {"user_id": "7"}}},
+    }
+    monkeypatch.setattr(
+        stripe.Webhook, "construct_event",
+        staticmethod(lambda payload, sig, secret: fake_event),
+    )
+
+    provider = StripeProvider(
+        secret_key="sk_test_x", webhook_secret="whsec_x",
+        success_url="https://example.com/success", cancel_url="https://example.com/cancel",
+    )
+    event = provider.verify_and_parse_webhook(b"irrelevant", "irrelevant-sig")
+    assert event.event_type == "checkout.session.completed"
+    assert event.session_id == "cs_test_456"
+    assert event.user_id == 7
+
+
+def test_make_payment_provider_stripe_branch(monkeypatch):
+    from billing import StripeProvider, make_payment_provider
+
+    monkeypatch.setenv("CRAVINGS_BILLING_PROVIDER", "stripe")
+    monkeypatch.setenv("STRIPE_SECRET_KEY", "sk_test_x")
+    monkeypatch.setenv("STRIPE_WEBHOOK_SECRET", "whsec_x")
+    monkeypatch.delenv("CRAVINGS_BILLING_SUCCESS_URL", raising=False)
+    monkeypatch.delenv("CRAVINGS_BILLING_CANCEL_URL", raising=False)
+    monkeypatch.setenv("CRAVINGS_BASE_URL", "https://cravings.example.com")
+    monkeypatch.delenv("BASE_PATH", raising=False)
+
+    provider = make_payment_provider()
+    assert isinstance(provider, StripeProvider)
+    assert provider._success_url == (
+        "https://cravings.example.com/?checkout=success&session_id={CHECKOUT_SESSION_ID}"
+    )
+    assert provider._cancel_url == "https://cravings.example.com/?checkout=cancel"
 
 
 @pytest.mark.asyncio

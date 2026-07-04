@@ -30,7 +30,7 @@ class WebhookEvent:
 
 
 class PaymentProvider(Protocol):
-    def create_checkout_session(
+    async def create_checkout_session(
         self,
         user: dict,
         amount_cents: int,
@@ -52,8 +52,12 @@ class MockProvider:
 
     def __init__(self, webhook_secret: str) -> None:
         self._secret = webhook_secret
+        # asyncio only holds a weak ref to a task via create_task; without a
+        # strong ref of our own the GC can reap it mid-sleep and the self-fired
+        # webhook silently never lands. Keep the instance alive here.
+        self._pending_tasks: set[asyncio.Task] = set()
 
-    def create_checkout_session(
+    async def create_checkout_session(
         self,
         user: dict,
         amount_cents: int,
@@ -62,9 +66,11 @@ class MockProvider:
     ) -> CheckoutSession:
         session_id = f"mock_cs_{secrets.token_hex(12)}"
         if _webhook_handler is not None:
-            asyncio.create_task(
+            task = asyncio.create_task(
                 _self_fire_webhook(session_id, user["id"], amount_cents, self._secret, _webhook_handler)
             )
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
         return CheckoutSession(
             session_id=session_id,
             amount_cents=amount_cents,
@@ -134,14 +140,17 @@ class StripeProvider:
         self._success_url = success_url
         self._cancel_url = cancel_url
 
-    def create_checkout_session(
+    async def create_checkout_session(
         self,
         user: dict,
         amount_cents: int,
         *,
         _webhook_handler=None,  # unused for Stripe — real webhook fires externally
     ) -> CheckoutSession:
-        session = self._stripe.checkout.Session.create(
+        # stripe-python's Session.create is a blocking HTTPS call; run it off
+        # the event loop so one checkout doesn't stall in-flight requests.
+        session = await asyncio.to_thread(
+            self._stripe.checkout.Session.create,
             mode="payment",
             line_items=[{
                 "price_data": {
@@ -196,5 +205,11 @@ def make_payment_provider() -> MockProvider | StripeProvider:
         )
         return StripeProvider(secret_key, webhook_secret, success_url, cancel_url)
 
-    webhook_secret = os.environ.get("CRAVINGS_BILLING_WEBHOOK_SECRET", "dev-mock-secret")
+    # No hardcoded fallback secret: a known default would let anyone forge a
+    # `checkout.session.completed` webhook and grant themselves premium on any
+    # deploy that hasn't switched to Stripe. The mock webhook self-fires *inside*
+    # this process (see MockProvider.create_checkout_session), so a random
+    # per-process secret is sufficient — the self-fire holds the same secret,
+    # while an external caller cannot guess it. Explicit env (CI/dev) still wins.
+    webhook_secret = os.environ.get("CRAVINGS_BILLING_WEBHOOK_SECRET") or secrets.token_hex(32)
     return MockProvider(webhook_secret)

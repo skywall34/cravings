@@ -204,16 +204,25 @@ def get_verification(conn: sqlite3.Connection, email: str) -> dict | None:
 
 
 def bump_verification_attempts(conn: sqlite3.Connection, email: str) -> int:
-    """Increment the failed-attempt counter and return the new value."""
-    conn.execute(
-        "UPDATE email_verifications SET attempts = attempts + 1 WHERE email = ?",
-        [email.lower()],
-    )
+    """Increment the failed-attempt counter and return the new value.
+
+    Guarded by `WHERE attempts < MAX` so the read-check-increment is one
+    atomic statement — concurrent mismatched-code requests can't all read
+    the same pre-increment count and slip past the cap before any of their
+    increments land (SQLite serializes the UPDATEs).
+    """
+    row = conn.execute(
+        "UPDATE email_verifications SET attempts = attempts + 1 "
+        "WHERE email = ? AND attempts < ? RETURNING attempts",
+        [email.lower(), VERIFICATION_MAX_ATTEMPTS],
+    ).fetchone()
     conn.commit()
+    if row is not None:
+        return row["attempts"]
     row = conn.execute(
         "SELECT attempts FROM email_verifications WHERE email = ?", [email.lower()]
     ).fetchone()
-    return row["attempts"] if row else 0
+    return row["attempts"] if row else VERIFICATION_MAX_ATTEMPTS
 
 
 def delete_verification(conn: sqlite3.Connection, email: str) -> None:

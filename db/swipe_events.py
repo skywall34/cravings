@@ -33,8 +33,10 @@ def recent_rejection_rate(conn: sqlite3.Connection, user_id: int, n: int = 10) -
     ).fetchall()
     if not rows:
         return 0.0
-    lefts = sum(1 for r in rows if r["direction"] == "left")
-    return lefts / len(rows)
+    # "never" is a harder reject than "left" (reward 0.0) — count both, or a
+    # user who only ever swipes "never" never trips the drift threshold.
+    rejections = sum(1 for r in rows if r["direction"] in ("left", "never"))
+    return rejections / len(rows)
 
 
 def days_since_last_swipe(conn: sqlite3.Connection, user_id: int) -> float:
@@ -135,26 +137,21 @@ def get_swipe_stats(conn: sqlite3.Connection, user_id: int) -> dict:
     }
 
 
-def _right_swiped_attribute_rows(
-    conn: sqlite3.Connection, user_id: int, before: str | None = None
-) -> list:
-    """Right-swiped item attribute rows for a user, optionally cumulative-to-date.
+def _right_swiped_attribute_rows(conn: sqlite3.Connection, user_id: int) -> list:
+    """Right-swiped item attribute rows for a user, full history.
 
     The single 'which swipes feed a Taste Axis' query: right swipes only,
-    joined to their food attributes. `before` (a timestamp string) bounds the
-    cumulative Drift window (se.timestamp < before)."""
+    joined to their food attributes, including the swipe timestamp so
+    callers can window the result (e.g. cumulative-to-date for Drift)
+    in Python instead of re-querying per window."""
     sql = (
         "SELECT f.spice_level, f.richness, f.dairy_content, f.sauce_heaviness, "
         "f.texture_softness, f.savory_umami, f.veggie_density, f.sweetness, "
-        "f.cuisine_type, se.time_of_day "
+        "f.cuisine_type, se.time_of_day, se.timestamp "
         "FROM swipe_events se JOIN food_items f ON se.food_item_id = f.id "
         "WHERE se.user_id = ? AND se.direction = 'right'"
     )
-    params: list = [user_id]
-    if before is not None:
-        sql += " AND se.timestamp < ?"
-        params.append(before)
-    return conn.execute(sql, params).fetchall()
+    return conn.execute(sql, [user_id]).fetchall()
 
 
 def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
@@ -179,8 +176,10 @@ def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
             "total_right_swipes": total_right,
         }
 
-    # Current axes: one read, scored by the shared Taste Axes seam.
-    axes = taste_axes(_right_swiped_attribute_rows(conn, user_id))
+    # Current axes: one read, scored by the shared Taste Axes seam. Reused
+    # below for the Drift windows instead of re-querying per window.
+    right_swiped_rows = _right_swiped_attribute_rows(conn, user_id)
+    axes = taste_axes(right_swiped_rows)
 
     # Recap
     top_cuisine_row = conn.execute(
@@ -224,8 +223,10 @@ def get_insights(conn: sqlite3.Connection, user_id: int) -> dict:
             next_mon, next_year = (1, year + 1) if mon == 12 else (mon + 1, year)
             end_date = f"{next_year}-{next_mon:02d}-01"
 
-            # Cumulative-to-date: same Taste Axes seam, bounded by end_date.
-            w_axes = taste_axes(_right_swiped_attribute_rows(conn, user_id, before=end_date))
+            # Cumulative-to-date: same Taste Axes seam, sliced in Python from
+            # the one full-history read above instead of a fresh scan+join.
+            w_rows = [r for r in right_swiped_rows if r["timestamp"] < end_date]
+            w_axes = taste_axes(w_rows)
 
             windows.append(month_names[mon - 1])
             for k in AXIS_KEYS:

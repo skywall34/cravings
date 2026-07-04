@@ -30,19 +30,23 @@ class UserModelStore:
     def __init__(self, db_path: Path = DEFAULT_DB_PATH):
         self.db_path = db_path
         self._cache: dict[int, ThompsonSamplingModel] = {}
-        self._locks: dict[int, threading.Lock] = {}
+        self._locks: dict[int, threading.RLock] = {}
         self._global_lock = threading.Lock()
 
-    def _user_lock(self, user_id: int) -> threading.Lock:
+    def user_lock(self, user_id: int) -> threading.RLock:
+        """Reentrant per-user lock. Hold it around any read-modify-persist span so
+        concurrent swipe/decay threads can't serialize a torn (μ, B) pair. Reentrant
+        because callers (e.g. record_swipe) hold it and then call get(), which
+        re-acquires it on a cache miss."""
         with self._global_lock:
             if user_id not in self._locks:
-                self._locks[user_id] = threading.Lock()
+                self._locks[user_id] = threading.RLock()
             return self._locks[user_id]
 
     def get(self, user_id: int) -> ThompsonSamplingModel:
         if user_id in self._cache:
             return self._cache[user_id]
-        with self._user_lock(user_id):
+        with self.user_lock(user_id):
             if user_id in self._cache:
                 return self._cache[user_id]
             model = self._load_or_create(user_id)

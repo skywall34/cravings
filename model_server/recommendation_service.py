@@ -65,11 +65,12 @@ class ModelServer:
         stays a pure read. Idempotent within a 6-hour window; persisting the bumped
         last_decay_ts is what prevents double-decay after a process restart. Returns
         True if decay ran (and the model was persisted)."""
-        model = self.store.get(user_id)
-        if model.maybe_apply_decay() > 0:
-            self.store.persist(user_id)
-            return True
-        return False
+        with self.store.user_lock(user_id):
+            model = self.store.get(user_id)
+            if model.maybe_apply_decay() > 0:
+                self.store.persist(user_id)
+                return True
+            return False
 
     def recommend(
         self,
@@ -227,33 +228,37 @@ class ModelServer:
 
     def record_swipe(self, user_id: int, item: dict, context: dict, reward: float) -> int:
         """Update model with swipe signal. Returns total_swipes after update."""
-        model = self.store.get(user_id)
-        model.record_swipe(item, context, reward)
+        # Hold the per-user lock across the mutate+persist so a concurrent swipe or
+        # decay can't interleave and write a torn (μ, B) pair (H3).
+        with self.store.user_lock(user_id):
+            model = self.store.get(user_id)
+            model.record_swipe(item, context, reward)
 
-        if reward == 1:
+            if reward == 1:
+                try:
+                    with db_connection(self.store.db_path) as conn:
+                        push_recent_like(conn, user_id, item["id"])
+                except Exception as e:
+                    logger.warning("push_recent_like failed for user %d: %s", user_id, e)
+
             try:
-                with db_connection(self.store.db_path) as conn:
-                    push_recent_like(conn, user_id, item["id"])
+                self.store.persist(user_id)
             except Exception as e:
-                logger.warning("push_recent_like failed for user %d: %s", user_id, e)
-
-        try:
-            self.store.persist(user_id)
-        except Exception as e:
-            logger.warning("failed to persist user %d model: %s", user_id, e)
-        return model.total_swipes
+                logger.warning("failed to persist user %d model: %s", user_id, e)
+            return model.total_swipes
 
     def get_status(self, user_id: int) -> dict:
         model = self.store.get(user_id)
         return {
             "total_swipes": model.total_swipes,
-            "current_alpha": model._get_alpha(),
+            "current_alpha": model._current_alpha(),
             "drift_active": model._drift_active,
         }
 
     def set_onboarding(self, user_id: int, preferences: dict, reset: bool = False) -> None:
-        model = self.store.get(user_id)
-        if reset:
-            model.reset()
-        model.set_prior_from_onboarding(preferences)
-        self.store.persist(user_id)
+        with self.store.user_lock(user_id):
+            model = self.store.get(user_id)
+            if reset:
+                model.reset()
+            model.set_prior_from_onboarding(preferences)
+            self.store.persist(user_id)

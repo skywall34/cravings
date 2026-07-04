@@ -7,18 +7,14 @@ Maintains posterior N(μ, B⁻¹) over weight vector w.
 - Decay: exponential decay on historical data (~14-day half-life)
 """
 
-import logging
 import math
-import pickle
 import time
 from dataclasses import dataclass, field
 
 import numpy as np
 from scipy.special import expit  # sigmoid
 
-from model.features import TOTAL_DIM, FeatureSchema, build_feature_vector
-
-_log = logging.getLogger(__name__)
+from model.features import TOTAL_DIM, build_feature_vector
 
 
 @dataclass
@@ -51,7 +47,14 @@ class ThompsonSamplingModel:
         self.last_decay_ts: float = time.time()
 
     def _get_alpha(self, recent_rejection_rate: float = 0.0) -> float:
-        """Get exploration parameter based on swipe count and drift detection."""
+        """Get exploration parameter based on swipe count and drift detection.
+
+        Mutates `_drift_active` as a side effect (sets/clears the latch based
+        on `recent_rejection_rate`) — only call this from the scoring path
+        (`score_items`), where a freshly-computed rate is available. Reads
+        (e.g. `GET /api/model/status`) must use `_current_alpha()` so they
+        can't spuriously clear a latched drift flag via the `0.0` default.
+        """
         if recent_rejection_rate >= self.config.drift_threshold:
             self._drift_active = True
             return self.config.drift_reset_alpha
@@ -59,6 +62,10 @@ class ThompsonSamplingModel:
         if self._drift_active and recent_rejection_rate < self.config.drift_threshold - 0.1:
             self._drift_active = False
 
+        return self._current_alpha()
+
+    def _current_alpha(self) -> float:
+        """Pure read of the current exploration parameter — no side effects."""
         if self._drift_active:
             return self.config.drift_reset_alpha
 
@@ -176,32 +183,3 @@ class ThompsonSamplingModel:
                 idx = CONTINUOUS_ATTRS.index(attr)
                 self.mu[idx] = signal * prior_strength
 
-    def save(self, path: str) -> None:
-        state = {
-            "mu": self.mu,
-            "B": self.B,
-            "total_swipes": self.total_swipes,
-            "config": self.config,
-            "_drift_active": self._drift_active,
-            "last_decay_ts": self.last_decay_ts,
-        }
-        with open(path, "wb") as f:
-            pickle.dump(state, f)
-
-    def load(self, path: str) -> None:
-        with open(path, "rb") as f:
-            state = pickle.load(f)
-        self.mu = state["mu"]
-        self.B = state["B"]
-        self.total_swipes = state["total_swipes"]
-        self.config = state["config"]
-        self._drift_active = state["_drift_active"]
-        self.last_decay_ts = state.get("last_decay_ts", time.time())
-        schema = FeatureSchema()
-        if not schema.validate_model(self):
-            _log.warning(
-                "Stale model blob (dim=%d, expected=%d) — resetting to fresh prior.",
-                len(self.mu), schema.total_dim,
-            )
-            self.config.dim = schema.total_dim
-            self.reset()

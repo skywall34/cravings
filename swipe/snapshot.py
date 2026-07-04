@@ -30,6 +30,7 @@ class Snapshot:
     days_since_last_session: float
     issued_at: float
     session_id: str = ""  # guest-only: bound to session instead of user_id
+    item_ids: tuple[int, ...] = ()  # ids recommended under this token; swipe must target one
 
     def to_context(self) -> dict:
         return {
@@ -112,6 +113,15 @@ def verify(token: str, user_id: int) -> Snapshot:
     if snap.user_id != user_id:
         raise SnapshotError("snapshot user mismatch")
     return snap
+
+
+def check_item(snap: Snapshot, item_id: int) -> None:
+    """Enforce that the swiped item was one the server actually recommended under
+    this token. Server-issued tokens always carry item_ids (see intake.shape_results),
+    so this blocks training the model on an arbitrary — possibly safety-filtered —
+    item id the client made up. Raises SnapshotError on mismatch."""
+    if snap.item_ids and item_id not in snap.item_ids:
+        raise SnapshotError("swiped item was not in the recommended set")
 
 
 def capture_guest(

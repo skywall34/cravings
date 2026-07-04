@@ -1,8 +1,5 @@
 """Tests for Thompson Sampling model."""
 
-import tempfile
-from pathlib import Path
-
 import numpy as np
 import pytest
 
@@ -137,6 +134,19 @@ class TestExplorationControl:
         model._get_alpha(recent_rejection_rate=0.4)
         assert not model._drift_active
 
+    def test_current_alpha_does_not_clear_latched_drift(self):
+        """`_current_alpha` (used by GET /api/model/status) must be a pure
+        read (MC2): the old status path called `_get_alpha()` with its 0.0
+        default, which spuriously cleared an active drift latch just by
+        being read."""
+        model = ThompsonSamplingModel()
+        model.total_swipes = 150
+        model._get_alpha(recent_rejection_rate=0.7)
+        assert model._drift_active
+        for _ in range(5):
+            assert model._current_alpha() == 0.8
+        assert model._drift_active
+
 
 class TestDecay:
     def test_decay_factor_current(self, model):
@@ -198,23 +208,3 @@ class TestColdStart:
         assert model.mu[0] == 2.0
 
 
-class TestPersistence:
-    def test_save_and_load(self, model, sample_item, sample_context):
-        # Train a bit
-        for _ in range(5):
-            model.record_swipe(sample_item, sample_context, 1)
-
-        with tempfile.NamedTemporaryFile(suffix=".pkl", delete=False) as f:
-            path = f.name
-
-        try:
-            model.save(path)
-
-            loaded = ThompsonSamplingModel()
-            loaded.load(path)
-
-            assert np.allclose(loaded.mu, model.mu)
-            assert np.allclose(loaded.B, model.B)
-            assert loaded.total_swipes == model.total_swipes
-        finally:
-            Path(path).unlink(missing_ok=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 
 import db.database as db
 from swipe.session import SessionStore
@@ -16,6 +17,7 @@ async def build_intake(
     user: dict,
     hour: float | None,
     session_id: str,
+    extra_excluded: list[int] | None = None,
 ) -> tuple[Snapshot, list[dict]]:
     """Capture context snapshot and eligible candidates for the Swipe Session.
 
@@ -23,7 +25,8 @@ async def build_intake(
     """
     snapshot = capture(conn, user["id"], hour)
     filt = UserFilter.from_user(user)
-    excluded = await sessions.seen(session_id)
+    session_excluded = await sessions.seen(session_id)
+    excluded = list(set(session_excluded) | set(extra_excluded or []))
     candidates = db.get_eligible_food_items(conn, filt.safety_mask, filt.dietary_restrictions, excluded)
     return snapshot, candidates
 
@@ -60,7 +63,11 @@ def shape_results(
 ) -> list[dict]:
     """Enrich model results with candidate metadata, snapshot token, and image URLs."""
     id_to_candidate = {c["id"]: c for c in candidates}
-    token = seal(snapshot)
+    # Bind the recommended ids into the token so /api/swipe can only train on an
+    # item we actually served (all of which already passed the safety/dietary
+    # filter) — not an arbitrary client-supplied id.
+    bound = replace(snapshot, item_ids=tuple(r["id"] for r in results))
+    token = seal(bound)
     for r in results:
         r["snapshot_token"] = token
         c = id_to_candidate.get(r["id"], {})
