@@ -7,7 +7,20 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
+from fastapi import HTTPException
+
 _SWEEP_INTERVAL = 100
+
+
+def rate_limited(message: str, retry_after: float) -> HTTPException:
+    """One 429 shape for every rate-limited route (nearby, auth throttle, resend) —
+    body + Retry-After header, so the three call sites can't drift apart."""
+    retry_int = max(1, int(retry_after))
+    return HTTPException(
+        status_code=429,
+        detail={"detail": message, "retry_after": retry_int},
+        headers={"Retry-After": str(retry_int)},
+    )
 
 
 @dataclass

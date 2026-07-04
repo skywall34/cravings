@@ -10,10 +10,10 @@ computed once and FastAPI filters output to the declared fields.
 """
 
 import os
-from typing import Literal
+from typing import Annotated, Literal
 
 from email_validator import EmailNotValidError, validate_email
-from pydantic import BaseModel, field_validator
+from pydantic import AfterValidator, BaseModel, field_validator
 
 from tagging import safety
 
@@ -25,6 +25,18 @@ def _admin_emails() -> frozenset[str]:
 
 def is_admin_email(email: str | None) -> bool:
     return bool(email and email.lower() in _admin_emails())
+
+
+def _normalize_email(v: str) -> str:
+    try:
+        return validate_email(v.strip(), check_deliverability=False).normalized
+    except EmailNotValidError as e:
+        raise ValueError(f"invalid email: {e}") from e
+
+
+# Single source for the "validate + normalize an email field" contract, shared
+# by every request body below instead of a copy-pasted @field_validator each.
+NormalizedEmail = Annotated[str, AfterValidator(_normalize_email)]
 
 
 # ---------------------------------------------------------------------------
@@ -80,17 +92,9 @@ class SessionResetBody(BaseModel):
 
 
 class RegisterBody(BaseModel):
-    email: str
+    email: NormalizedEmail
     password: str
     name: str
-
-    @field_validator("email")
-    @classmethod
-    def _norm_email(cls, v: str) -> str:
-        try:
-            return validate_email(v.strip(), check_deliverability=False).normalized
-        except EmailNotValidError as e:
-            raise ValueError(f"invalid email: {e}") from e
 
     @field_validator("password")
     @classmethod
@@ -108,29 +112,13 @@ class RegisterBody(BaseModel):
 
 
 class LoginBody(BaseModel):
-    email: str
+    email: NormalizedEmail
     password: str = ""
-
-    @field_validator("email")
-    @classmethod
-    def _norm_email(cls, v: str) -> str:
-        try:
-            return validate_email(v.strip(), check_deliverability=False).normalized
-        except EmailNotValidError as e:
-            raise ValueError(f"invalid email: {e}") from e
 
 
 class VerifyEmailBody(BaseModel):
-    email: str
+    email: NormalizedEmail
     code: str
-
-    @field_validator("email")
-    @classmethod
-    def _norm_email(cls, v: str) -> str:
-        try:
-            return validate_email(v.strip(), check_deliverability=False).normalized
-        except EmailNotValidError as e:
-            raise ValueError(f"invalid email: {e}") from e
 
     @field_validator("code")
     @classmethod
@@ -139,15 +127,7 @@ class VerifyEmailBody(BaseModel):
 
 
 class ResendVerificationBody(BaseModel):
-    email: str
-
-    @field_validator("email")
-    @classmethod
-    def _norm_email(cls, v: str) -> str:
-        try:
-            return validate_email(v.strip(), check_deliverability=False).normalized
-        except EmailNotValidError as e:
-            raise ValueError(f"invalid email: {e}") from e
+    email: NormalizedEmail
 
 
 class PasswordBody(BaseModel):
@@ -201,3 +181,25 @@ class AuthResultOut(BaseModel):
     is_premium: bool
     is_admin: bool
     email_verified: bool = False
+
+    @classmethod
+    def of(
+        cls, *, id: int, name: str, email: str | None, api_token: str,
+        onboarding_complete: bool = False, is_premium: bool = False,
+        email_verified: bool = False,
+    ) -> "AuthResultOut":
+        return cls(
+            id=id, name=name, email=email, api_token=api_token,
+            is_registered=True, onboarding_complete=onboarding_complete,
+            is_premium=is_premium, is_admin=is_admin_email(email),
+            email_verified=email_verified,
+        )
+
+    @classmethod
+    def of_user_row(cls, user: dict, *, email_verified: bool) -> "AuthResultOut":
+        return cls.of(
+            id=user["id"], name=user["name"], email=user["email"], api_token=user["api_token"],
+            onboarding_complete=bool(user["onboarding_complete"]),
+            is_premium=bool(user.get("is_premium", 0)),
+            email_verified=email_verified,
+        )
