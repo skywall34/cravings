@@ -29,7 +29,7 @@ Multi-user support is live: each user has their own model state (μ, B matrices)
 ### Components
 
 - **React + Vite Web App**: Swipe UI (✗/✓ buttons + drag-to-swipe gesture with tilt/NOPE/LIKE overlays), guests swipe with no DB row (state in localStorage), registered users get personalized Thompson recommendations via Bearer token. Right-swipe triggers Google Places restaurant suggestions. Located in `frontend/`.
-- **FastAPI App (`main.py`)**: REST API + Thompson Sampling in-process. Bearer-token auth, food item CRUD, Google Places proxy, swipe lifecycle. Blocking ML/SQLite calls wrapped in `asyncio.to_thread`. See ADR-0001 for the Go+gRPC reversal rationale.
+- **FastAPI App (`main.py`)**: REST API + Thompson Sampling in-process. Bearer-token auth, food item CRUD, Google Places proxy, swipe lifecycle. Blocking ML/SQLite/bcrypt calls wrapped in `asyncio.to_thread` (auth password hashing/verify included, so a burst of logins can't stall the event loop). See ADR-0001 for the Go+gRPC reversal rationale.
 - **Recommender seam (`recommender.py`)**: One interface, one adapter per **User Identity** class — `RegisteredRecommender` (DB-backed Local Model via `ModelServer`) and `GuestRecommender` (session-scoped Local Model in `SessionStore`, Global-Popularity fallback). Each owns its full request flow (intake → score → `shape_results` for `recommend()`; verify → model update → session-complete for `record()`). The recommend/swipe routes resolve identity once via `make_recommender()` and never branch on Guest vs Registered again. Reward comes from the shared `swipe.reward_for_direction()`.
 - **Swipe module (`swipe/`)**: Owns Right-Swipe / Left-Swipe contract — context capture, HMAC-signed snapshot tokens, denormalized DB write, session seen-set. `SessionStore` also holds per-session guest Thompson models with TTL eviction. `reward_for_direction()` is the single source of the reward policy used by both identities.
 - **Model service (`model_server/`)**: In-process Python module (NOT a server). `ModelServer` owns recommend/swipe/status/onboarding business logic; `recommend()` is a pure read of the posterior (impression write aside) and `apply_decay()` is the explicit write-bearing decay step the recommend flow calls first. `UserModelStore` handles thread-safe per-user μ/B BLOB persistence.
@@ -134,7 +134,7 @@ The route resolves a `Recommender` via `make_recommender()`; for a registered us
 **3b. Swipe (`POST /api/swipe`)**
 
 1. Client returns `snapshot_token` + `food_item_id` + `direction`.
-2. Server verifies HMAC token — rejects if tampered or expired. This ensures the context used for training matches the context that was active when the user made their decision.
+2. Server verifies HMAC token — rejects if tampered or expired. This ensures the context used for training matches the context that was active when the user made their decision. The token also **binds the recommended item ids**: a swipe whose `food_item_id` was not in the served set is rejected, so the model can never be trained on an arbitrary (possibly safety-filtered) item the client names.
 3. Reward computed: right-swipe = 1.0, left-swipe = `CRAVINGS_LEFT_SWIPE_REWARD` (default 0.3). Non-zero left reward means the model adjusts rather than strongly penalizes — left-swipe = "not this time", not "never".
 4. Model update (Laplace approximation):
    ```
@@ -195,7 +195,7 @@ Effect: old swipes gradually contribute less. After ~14 days, their influence ha
 
 1. **Filtering before model** — safety/dietary flags remove incompatible items before any ML scoring. Model never sees unsafe items.
 2. **Content-based, not collaborative** — model learns over food attributes (spice, texture, cuisine), not food IDs. A new dish is immediately scoreable from its attributes without any swipe history on that dish.
-3. **Context round-trip is tamper-proof** — HMAC snapshot ensures training data reflects real context at swipe time.
+3. **Context round-trip is tamper-proof** — HMAC snapshot ensures training data reflects real context at swipe time, and binds the served item ids so a swipe can only train on an item that was actually recommended (and therefore already passed the filter).
 4. **Decay enables preference drift** — user taste can evolve; model doesn't lock into early signals.
 5. **Per-user isolation** — μ/B stored per user in DB; no shared state, no cross-user leakage.
 
@@ -345,7 +345,7 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 - **"Not today" vs "never" swipe**: 3-way left (`never` = permanent per-item exclude + `reward=0.0`). `SwipeDirection` already has `'never'` in `api.ts` — check how far it's wired before planning.
 - **Interaction terms re-eval**: `CRAVINGS_USE_INTERACTIONS=1` once 200+ real user swipes exist.
 
-**P0 deploy fix verified (2026-05-23)**: token-invalidation bug closed. Deploy contract now: rebuild Docker image to ship content (cravings.db baked as `/app/seed/cravings.db` → upserted into volume DB on startup); only `images/` rsyncs. **Never** rsync `cravings.db` again. See `db/seed_sync.py` and `docs/VPS_DEPLOY.md`.
+**P0 deploy fix verified (2026-05-23)**: token-invalidation bug closed. Deploy contract now: rebuild Docker image to ship content (cravings.db baked as `/app/seed/cravings.db` → upserted into volume DB on startup); only `images/` rsyncs. **Never** rsync `cravings.db` again. See `db/seed_sync.py` and `docs/internal/VPS_DEPLOY.md`.
 
 **P12 image backfill complete (2026-05-23)**: 436/510 items (85.5%) have images. Pipeline upgraded to 4 tiers — Wikidata SPARQL → Wikipedia REST disambig → **Wikimedia Commons search (tier-2.5, new)** → plain title. Tier-2.5 is the main driver: full-text search in File namespace with license check, marked `auto`. All 11 cuisine placeholders now deployed. `scripts/smoke_test_vps.sh` extended with image checks (17 checks, all pass). 231 tests passing.
 
@@ -362,7 +362,7 @@ Open work:
 
 0. **P0 token-invalidation bug — FIXED + VERIFIED (2026-05-23).** Root cause: VPS deploy used to `rsync cravings.db` over the volume, wiping VPS user rows so any VPS-issued `api_token` returned 401 after the next deploy; frontend `ensureUser()` then skipped guest-mint because localStorage still held the stale token. Fix (both layers shipped):
    - **Frontend** — `frontend/src/api.ts` `request()` detects 401 on any auth'd call, clears `cravings_token`, and reloads. Bootstrap mints a fresh guest. Registered users re-login once.
-   - **Backend/deploy** — Dockerfile bakes `cravings.db` to `/app/seed/cravings.db`; `db/seed_sync.py` UPSERTs `food_items` + `restaurants` from seed into the volume DB at startup (`main.py` lifespan). User data on the volume is now never touched by a deploy. `VPS_DEPLOY.md` updated to drop the DB rsync step. Tests: `tests/test_seed_sync.py` (7 cases, 238 total pass).
+   - **Backend/deploy** — Dockerfile bakes `cravings.db` to `/app/seed/cravings.db`; `db/seed_sync.py` UPSERTs `food_items` + `restaurants` from seed into the volume DB at startup (`main.py` lifespan). User data on the volume is now never touched by a deploy. `docs/internal/VPS_DEPLOY.md` updated to drop the DB rsync step. Tests: `tests/test_seed_sync.py` (7 cases, 238 total pass).
    - **Post-deploy verification (VPS, 2026-05-23):** `users=16`, `swipes=163` preserved across the deploy; `food_items_with_image=436 / total=510` matches local seed. Smoke tests 17/17.
 
 1. ~~**Simulate P11 improvements**~~ — **DONE (2026-05-24)**. `last_10` hit rate 71.3% (+12.6pp lift over random, 30 runs × 50 swipes, picky profile). Both pass bars cleared.
@@ -398,25 +398,48 @@ cravings/
 │   ├── src/
 │   │   ├── App.tsx         # Root: auth init, session state, swipe loop
 │   │   ├── App.css         # All styles
-│   │   ├── api.ts          # fetch wrappers + interfaces; apiBase() (web=/cravings, native=prod), assetUrl() (native prefixes relative img URLs with prod origin), async token, callback 401; getPremium/setPremium (client-side premium flag, cravings_premium key)
+│   │   ├── api.ts          # fetch wrappers + interfaces; request()/{auth:false} option, apiBase()
+│   │   │                   #   (web=/cravings, native=prod), assetUrl(), async token, 401 recovery,
+│   │   │                   #   RateLimitError, effectivePremium(u) (single is_premium||is_admin check)
+│   │   ├── colorUtils.ts   # hexToRgba/shiftHex — shared by StatsCharts/AdminCharts/Archetype
+│   │   ├── cuisineEmoji.ts # Canonical CUISINE_EMOJI map — shared by 5 components + admin
 │   │   ├── storage.ts      # Storage seam: async get/set/remove — web→localStorage, native→@capacitor/preferences
+│   │   ├── useInstall.ts   # PWA install-prompt hook (beforeinstallprompt capture + trigger)
+│   │   ├── InstallPrompt.tsx # PWA install UI (3-bucket: eligible/ineligible/installed)
 │   │   ├── vite-env.d.ts   # Vite client types + VITE_API_BASE_URL (set only in the Capacitor build)
+│   │   ├── admin.tsx       # Admin SPA entry point (separate Vite build target from the main app)
+│   │   ├── admin/
+│   │   │   ├── AdminApp.tsx    # Admin shell: token gate → Dashboard
+│   │   │   ├── AdminLogin.tsx  # Admin token entry
+│   │   │   ├── Dashboard.tsx   # Cross-user metrics dashboard (retention/engagement/catalog panels)
+│   │   │   ├── AdminCharts.tsx # Admin chart primitives: Panel, StatTile, AttrRadar, prettyKey, fmtDate
+│   │   │   ├── CravingsLogo.tsx
+│   │   │   └── types.ts        # Admin API response shapes
 │   │   ├── components/
 │   │   │   ├── SwipeCard.tsx       # Food card with drag-to-swipe (tilt, NOPE/LIKE overlays, 120px threshold, spring snap-back; touch axis-lock — pan-y + 10px deadzone so vertical drag scrolls the page, horizontal swipes); ✗/✓/Never buttons; cuisine image with emoji fallback; AllergenNote
 │   │   │   ├── RestaurantPanel.tsx # Nearby restaurants after right-swipe; AllergenNote
 │   │   │   ├── AuthMenu.tsx        # Header dropdown: guest→Login/Register, registered→Profile/Insights/Logout; Insights badge = ✨ (premium) or UPGRADE pill (free)
 │   │   │   ├── LoginForm.tsx       # Email+password login — restyled pill button, focus-accent border, error box
 │   │   │   ├── RegisterForm.tsx    # Registration + PasswordStrength meter, guest ✨ callout, Terms/Privacy links
+│   │   │   ├── EmailVerification.tsx # 6-digit OTP entry screen (post-register + pre-login gate); resend w/ cooldown
 │   │   │   ├── ProfilePage.tsx     # Simplified: identity row (avatar initial), 3-up BigStat grid, ArchetypeTeaser → Insights; YesRateGauge, CuisineAffinity, PeakTimesChart; password change; GDPR export/delete
 │   │   │   ├── Archetype.tsx       # 5-axis taste system (Heat/Indulgence/Texture/Adventure/Tempo); AXIS_META, deriveArchetype(axes), deriveArchetypeAt(idx, series); ArchetypeHero, AxisBars, LockOverlay, LockGlyph, PremiumBadge — real data from /api/insights
 │   │   │   ├── Insights.tsx        # Paid hub: fetches /api/insights on mount (premium only); free=archetype name+blurred, premium=real axes/drift/recap; progress gate when <20 right swipes; drift sections hidden when no multi-month data; axis-aware DriftDeltas (Tempo→night-fraction label, Adventure→top cuisine names); MonthlyRecap month from new Date(); Web Share API share button (hidden when navigator.share unsupported)
-│   │   │   ├── PaywallSheet.tsx    # Mock Stripe $4.99 one-time bottom sheet; form→processing→success; "Demo only — no card is charged." onSuccess flips client-side premium flag
+│   │   │   ├── PaywallSheet.tsx    # Real Stripe Checkout redirect ($4.99 one-time); createCheckout() → session.url
 │   │   │   ├── StatsCharts.tsx     # Chart primitives (all SVG, no chart lib): deriveTasteProfile, FlavorRadar (reused in Insights), YesRateGauge, CuisineAffinity, PeakTimesChart
+│   │   │   ├── SessionSummary.tsx  # End-of-session recap screen (swipe history, new-session/adjust-tastes CTAs)
+│   │   │   ├── OnboardingScreen.tsx # Taste-slider onboarding (dietary/safety + preference sliders)
+│   │   │   ├── LocationConsentModal.tsx # Geolocation consent prompt (before first /api/nearby call)
 │   │   │   ├── AllergenNote.tsx    # Inline amber allergen disclaimer (best-effort, not certified)
 │   │   │   ├── ConsentBanner.tsx   # First-load cookie/session consent banner (storage-seam-persisted)
 │   │   │   └── LegalPages.tsx      # Full Privacy Policy + Terms of Service screens
-│   │   └── hooks/
-│   │       └── useLocation.ts      # Geolocation: native→@capacitor/geolocation (coarse), web→navigator.geolocation
+│   │   ├── hooks/
+│   │   │   ├── useLocation.ts        # Geolocation: native→@capacitor/geolocation (coarse), web→navigator.geolocation
+│   │   │   ├── useLocationConsent.ts # Persists the user's geolocation consent decision
+│   │   │   └── useRecommender.ts     # Client-side recommend/swipe loop hook wrapping recommender/
+│   │   └── recommender/
+│   │       ├── recommender.ts   # Client-side session/session-summary types + swipe-history helpers
+│   │       └── transport.ts     # Thin HTTP transport layer over api.ts for the recommend/swipe loop
 │   ├── capacitor.config.ts # appId com.themshin.cravings, webDir dist, androidScheme https
 │   ├── .env.capacitor      # VITE_API_BASE_URL=https://themshin.com/cravings (Capacitor build only; web build untouched)
 │   ├── android/            # Generated Capacitor Android project (committed); coarse-location manifest, targetSdk 35
@@ -425,70 +448,107 @@ cravings/
 ├── db/
 │   ├── schema.sql          # SQLite/PostgreSQL schema
 │   ├── connection.py       # get_connection, db_connection, init_db, _migrate
-│   ├── users.py            # user CRUD, auth, password, recent_likes; delete_user (GDPR Art.17)
-│   ├── food.py             # food items, restaurants, embeddings, impressions
-│   ├── swipe_events.py     # swipe recording, stats, swiped-cuisine history; delete_swipes_for_user,
-│   │                       #   delete_impressions_for_user, get_all_swipes_for_user (GDPR)
+│   ├── users.py            # user CRUD, auth, password, recent_likes, email verification (OTP); delete_user (GDPR Art.17)
+│   ├── food.py             # food items, restaurants, embeddings, impressions; _eligibility_clauses
+│   │                       #   (shared safety-filter WHERE fragment), eligible-items TTL cache
+│   ├── swipe_events.py     # swipe recording, stats, swiped-cuisine history, insights aggregation;
+│   │                       #   delete_swipes_for_user, delete_impressions_for_user, get_all_swipes_for_user (GDPR)
+│   ├── metrics.py          # Cross-user aggregate queries backing the admin dashboard
+│   ├── seed_sync.py        # UPSERT content rows (food_items/restaurants) from the baked seed DB into the live DB
 │   └── database.py         # re-export hub — all callers unchanged; prefer direct sub-module imports
 ├── tagging/
 │   ├── prompt.py           # Few-shot prompt template for Ollama/gemma4:e2b
 │   ├── client.py           # Ollama API client, response parsing/validation
-│   └── safety.py           # Safety & dietary bitmask computation; UserFilter dataclass
+│   ├── safety.py           # Safety & dietary bitmask computation; UserFilter dataclass
+│   ├── wikimedia.py        # 3-tier image lookup: Wikidata SPARQL → Wikipedia REST → plain title
+│   ├── openverse.py        # Openverse API fallback image source
+│   └── judge.py            # LLM-as-judge image review (verdict/reason) for auto-fetched images
 ├── model/
 │   ├── features.py         # Feature engineering: one-hot encoding, context vectors (54-dim total)
 │   └── thompson.py         # Contextual Thompson Sampling with Bayesian logistic regression
-├── scripts/
-│   ├── seed_data.py        # ~73 restaurants, ~1000 food items across 21 cuisines
-│   ├── run_pipeline.py     # Seed DB → tag via Ollama → store results
-│   ├── simulate.py         # Synthetic user simulation for model validation
-│   └── fetch_food_images.py  # Wikimedia image backfill + manual curation CLI
-├── tagging/
-│   └── wikimedia.py        # 3-tier image lookup: Wikidata SPARQL → Wikipedia REST → plain title
 ├── model_server/
-│   ├── model_service.py        # UserModelStore — thread-safe per-user μ/B BLOB cache
-│   └── recommendation_service.py  # ModelServer — apply_decay (explicit decay+persist), recommend (pure read), record_swipe, get_status, set_onboarding
+│   ├── model_service.py        # UserModelStore — thread-safe (RLock) per-user μ/B BLOB cache
+│   └── recommendation_service.py  # ModelServer — apply_decay (explicit decay+persist), recommend (pure read), record_swipe, get_status (pure alpha read), set_onboarding
 ├── swipe/
-│   ├── snapshot.py             # Snapshot dataclass, capture(), seal(); _decode_authentic() + verify()/verify_guest() (HMAC-SHA256, 30-min TTL)
+│   ├── snapshot.py             # Snapshot dataclass (incl. served item_ids + check_item), capture(), seal(); _decode_authentic() + verify()/verify_guest() (HMAC-SHA256, 30-min TTL)
 │   ├── session.py              # SessionStore: per-session locks, seen-set, guest ThompsonSamplingModel storage, TTL eviction
 │   ├── recorder.py             # record_swipe(): full Right-Swipe / Left-Swipe contract; reward_for_direction() (shared reward policy)
-│   └── intake.py               # build_intake()/build_guest_intake(): snapshot + filtering; shape_results() + add_image_urls()
+│   └── intake.py               # build_intake()/build_guest_intake(): snapshot + filtering (both take extra_excluded); shape_results() + add_image_urls()
+├── places/
+│   └── adapter.py               # Google Places nearby-restaurant lookup + PlacesError
 ├── recommender.py              # Recommender seam: Guest/RegisteredRecommender adapters + make_recommender() factory (identity resolved once; routes are thin transport)
-├── main.py                     # FastAPI app: routes, lifespan, auth dep, Places proxy, StaticFiles SPA mount;
+├── billing.py                  # Payment provider seam: MockProvider (self-fires webhook, random per-process secret) / StripeProvider (async create_checkout_session, threaded HTTPS call); make_payment_provider()
+├── email_service.py             # SMTP sender seam (async, threaded) + send_verification_email()
+├── taste_axes.py                 # 5-axis Taste Axes scoring (Heat/Indulgence/Texture/Adventure/Tempo) shared by stats + insights
+├── schemas.py                    # Pydantic request/response models; NormalizedEmail; UserInfoOut.of()/AuthResultOut.of()/.of_user_row()
+├── main.py                     # FastAPI app: routes, lifespan, auth deps (_get_user/_require_premium/_require_admin),
+│                               #   Places proxy, StaticFiles SPA mount, admin metrics + batch-tag routes, billing routes;
 │                               #   _security_headers middleware (CSP/HSTS/X-Frame/nosniff/Referrer/Permissions);
-│                               #   auth rate-limit (_auth_limiter) on login+register; constant-time admin compare
-├── rate_limit.py               # Generic per-key token-bucket limiter (asyncio.Lock, injectable clock, lazy sweep).
-│                               #   Used by /api/nearby and /api/auth (login+register brute-force protection)
-├── Dockerfile                  # Multi-stage: node builds frontend/dist, python runtime serves both
+│                               #   auth rate-limit (_auth_limiter) on login/register/verify/resend; constant-time admin compare
+├── rate_limit.py               # Generic per-key token-bucket limiter (asyncio.Lock, injectable clock, lazy sweep) +
+│                               #   rate_limited(message, retry_after) — single 429 shape. Used by /api/nearby and /api/auth/*
+├── Dockerfile                  # Multi-stage: node builds frontend/dist, python runtime serves both; bakes cravings.db as seed
 ├── docker_build.sh             # Build + push to ghcr.io/skywall34/cravings:prod
-├── .dockerignore
-├── VPS_DEPLOY.md               # Step-by-step VPS setup (for manual execution on Hostinger)
-├── docs/
-│   └── adr/
-│       └── 0001-keep-go-python-architecture.md  # Note: ADR title superseded — see ADR for the reversal
-├── CONTEXT.md                  # Domain glossary (Swipe Session, Right-Swipe, Restaurant Suggestion, etc.)
+├── .dockerignore                # Excludes images/ (~89MB) — prod reads images from the rsync'd volume, not the image
 ├── images/
 │   ├── food/                   # {slug}-{hash}-400.webp + {slug}-{hash}-800.webp  (gitignored)
 │   └── cuisines/               # american.webp, italian.webp, … (gitignored; auto-fetched via --placeholders)
+├── scripts/
+│   ├── seed_data.py             # ~73 restaurants, ~1000 food items across 21 cuisines
+│   ├── run_pipeline.py          # Seed DB → tag via Ollama → store results
+│   ├── simulate.py              # Synthetic user simulation for model validation
+│   ├── sla_eval.py              # Recommend-latency SLA gate (pytest -m slow)
+│   ├── embed_items.py           # Backfill embedding BLOBs for tagged items (similarity boost)
+│   ├── curator_worklist.py      # CSV worklist of items needing manual image curation
+│   ├── mark_csv_rejected.py     # Bulk-reject items from a curation CSV
+│   ├── judge_images.py          # Batch-run the LLM image judge over fetched images
+│   ├── fetch_food_images.py     # Wikimedia/Openverse image backfill + manual curation CLI
+│   ├── dev_stripe.sh            # `stripe listen` helper for local webhook testing
+│   └── smoke_test_vps.sh        # Post-deploy VPS smoke test
+├── docs/
+│   ├── CLAUDE.md                 # This file
+│   ├── PROJECT.md, QUICKSTART.md, DESIGN.md, ANDROID_HANDOFF.md, MODEL_LIFECYCLE_SCENARIOS.md
+│   └── internal/
+│       ├── CONTEXT.md            # Domain glossary (Swipe Session, Right-Swipe, Restaurant Suggestion, etc.)
+│       ├── VPS_DEPLOY.md         # Step-by-step VPS setup (for manual execution on Hostinger)
+│       ├── PAID_TIER_PLAN.md, ADMIN_METRICS_API.md, STRIPE_PAYMENTS.md, STRIPE_VPS_DEPLOY.md,
+│       │   PLAN_P12_FOOD_IMAGES.md, PLAY_STORE_PUBLISH.md, TESTING_FRONTEND.md
+│       ├── adr/                  # 18 ADRs (0001–0018+)
+│       └── agents/               # domain.md, issue-tracker.md, triage-labels.md (agent-facing playbooks)
 ├── tests/
 │   ├── mocks/
 │   │   ├── ollama_responses.py
-│   │   └── wikimedia_responses.py   # Canned Wikimedia API responses for image pipeline tests
+│   │   ├── openverse_responses.py
+│   │   └── wikimedia_responses.py   # Canned API responses for image pipeline tests
+│   ├── fixtures/                # (currently empty — reserved for future shared test fixtures)
 │   ├── test_api.py             # FastAPI route tests (httpx ASGITransport); guest taste pref + L3 first-card alignment over HTTP
 │   ├── test_recommender.py     # Recommender seam: Guest/Registered adapters direct (no ASGI); reward-policy regression, identity factory
 │   ├── test_recommend_alignment.py  # L2: Monte-Carlo slider→first-card alignment (in-process, synthetic pools)
 │   ├── test_recommend_real_data.py  # L4: slider→first-card alignment on the real cravings.db catalog (read-only; skips if DB absent)
+│   ├── test_model_sla.py       # L-SLA: recommend-latency budget on the real catalog (pytest -m slow)
 │   ├── test_session_store.py   # SessionStore unit tests: model storage, TTL eviction, per-session lock isolation
-│   ├── test_auth.py            # Auth + profile stats (incl. flavor_profile) + GDPR delete/export + location audit (27 tests)
+│   ├── test_auth.py            # Auth (incl. email verification, enumeration/throttle regressions) + profile stats + GDPR delete/export + location audit
+│   ├── test_billing.py         # MockProvider unit tests + webhook/checkout integration (session-owner grant, mock-secret guard)
+│   ├── test_insights.py        # /api/insights gating + Taste Axes math (heat/indulgence/texture/adventure/tempo, drift, recap)
+│   ├── test_admin_metrics.py   # Admin metrics API (retention/engagement/catalog) + is_admin gate
+│   ├── test_security_headers.py # CSP/HSTS/X-Frame/etc. header assertions
+│   ├── test_rate_limit.py      # RateLimiter unit tests (token bucket, refill, sweep)
+│   ├── test_seed_sync.py       # Seed→live content UPSERT sync
+│   ├── test_taste_axes.py      # Taste Axes scoring unit tests
 │   ├── test_database.py
 │   ├── test_safety.py
 │   ├── test_tagging.py
 │   ├── test_prompt.py
+│   ├── test_judge.py           # LLM image-judge unit tests
+│   ├── test_openverse.py       # Openverse fallback image source tests
+│   ├── test_places.py          # Google Places adapter tests
 │   ├── test_features.py
 │   ├── test_thompson.py
 │   ├── test_model_service.py   # ModelServer + UserModelStore direct tests; stratified cold-start
 │   ├── test_wikimedia.py       # Wikimedia lookup tiers + license filter tests
 │   ├── test_image_pipeline.py  # End-to-end: tier hits, dry-run, manual curation
 │   └── test_image_serving.py   # StaticFiles mount + Cache-Control header tests
+├── CODE_REVIEW_PROGRESS.md     # Handoff doc tracking the whole-app review's fix status by tier
 └── pyproject.toml
 ```
 
@@ -807,12 +867,16 @@ docker run -p 8080:8080 \
 
 ### Issue tracker
 
-Issues live as local markdown files under `.scratch/<feature>/` in this repo. See `docs/agents/issue-tracker.md`.
+Issues live as local markdown files under `.scratch/<feature>/` in this repo. See `docs/internal/agents/issue-tracker.md`.
 
 ### Triage labels
 
-Default canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/agents/triage-labels.md`.
+Default canonical label vocabulary (`needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`). See `docs/internal/agents/triage-labels.md`.
 
 ### Domain docs
 
-Single-context: `CONTEXT.md` + `docs/adr/` at repo root. See `docs/agents/domain.md`.
+Single-context: `docs/internal/CONTEXT.md` + `docs/internal/adr/`. See `docs/internal/agents/domain.md`.
+
+## Resume Claude Session
+
+claude --resume 42dbbeed-46c7-4709-af1d-c69b27ac404b
