@@ -14,6 +14,7 @@ class SessionStore:
         self._models: dict[str, ThompsonSamplingModel] = {}
         self._locks: dict[str, asyncio.Lock] = {}
         self._last_accessed: dict[str, float] = {}
+        self._consumed: dict[str, set[tuple[str, int]]] = {}
 
     def _get_lock(self, session_id: str) -> asyncio.Lock:
         if session_id not in self._locks:
@@ -28,6 +29,7 @@ class SessionStore:
             self._models.pop(sid, None)
             self._locks.pop(sid, None)
             self._last_accessed.pop(sid, None)
+            self._consumed.pop(sid, None)
 
     async def seen(self, session_id: str) -> list[int]:
         if not session_id:
@@ -50,11 +52,28 @@ class SessionStore:
         async with self._get_lock(session_id):
             return len(self._seen.get(session_id, set()))
 
+    async def consume(self, session_id: str, snapshot_id: str, item_id: int) -> bool:
+        """Returns True the first time (snapshot_id, item_id) is recorded for this
+        session, False on replay. In-memory only — acceptable since the app runs
+        single-process (no --workers in the Dockerfile CMD)."""
+        if not session_id:
+            return True
+        self.evict_stale()
+        async with self._get_lock(session_id):
+            key = (snapshot_id, item_id)
+            bucket = self._consumed.setdefault(session_id, set())
+            if key in bucket:
+                return False
+            bucket.add(key)
+            self._last_accessed[session_id] = time.monotonic()
+            return True
+
     async def reset(self, session_id: str) -> None:
         async with self._get_lock(session_id):
             self._seen.pop(session_id, None)
             self._models.pop(session_id, None)
             self._last_accessed.pop(session_id, None)
+            self._consumed.pop(session_id, None)
 
     async def get_model(self, session_id: str) -> ThompsonSamplingModel | None:
         if not session_id:
@@ -75,3 +94,4 @@ class SessionStore:
         self._models.clear()
         self._locks.clear()
         self._last_accessed.clear()
+        self._consumed.clear()

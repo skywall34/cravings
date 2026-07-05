@@ -107,6 +107,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
         ")"
     )
 
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS consumed_snapshot_items ("
+        "  snapshot_id TEXT NOT NULL,"
+        "  food_item_id INTEGER NOT NULL,"
+        "  user_id INTEGER NOT NULL REFERENCES users(id),"
+        "  consumed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,"
+        "  PRIMARY KEY (snapshot_id, food_item_id)"
+        ")"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_consumed_snapshot_items_consumed_at "
+        "ON consumed_snapshot_items(consumed_at)"
+    )
+
     try:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL"

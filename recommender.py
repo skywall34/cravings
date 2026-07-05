@@ -161,6 +161,13 @@ class GuestRecommender:
     async def record(self, *, item, direction, token) -> dict:
         snapshot = swipe.verify_guest(token, self._session_id)
         swipe.check_item(snapshot, item["id"])  # swipe must target a served item (H1)
+        # Single-use nonce (H1 replay): a served item can be trained on once per
+        # issued token. snapshot_id is "" only for tokens issued in the ~30min
+        # before this check shipped — skip for that time-boxed transition window.
+        if snapshot.snapshot_id and not await self._sessions.consume(
+            self._session_id, snapshot.snapshot_id, item["id"]
+        ):
+            raise swipe.SnapshotError("snapshot already used for this item")
         await self._sessions.mark(self._session_id, item["id"])
         seen = await self._sessions.count(self._session_id)
         model = await self._ensure_model()

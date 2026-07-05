@@ -157,6 +157,37 @@ async def test_guest_record_accepts_served_item():
     assert model.rewards == [1.0]
 
 
+@pytest.mark.asyncio
+async def test_guest_record_rejects_replayed_item():
+    """A snapshot token, once used to record a swipe on an item, can't be replayed
+    to record a second swipe on the same item — closes the H1 residual."""
+    sessions = SessionStore()
+    model = _SpyModel()
+    await sessions.set_model("s1", model)
+    rec = _guest(sessions, "s1")
+    token = _guest_token_bound("s1", [7, 8])
+
+    await rec.record(item={"id": 7}, direction="right", token=token)
+    with pytest.raises(swipe.SnapshotError):
+        await rec.record(item={"id": 7}, direction="right", token=token)
+    assert model.rewards == [1.0]  # replay never trained the model a 2nd time
+
+
+@pytest.mark.asyncio
+async def test_guest_record_allows_each_served_item_once():
+    """The nonce is per-(snapshot,item), not per-snapshot — a legitimate batch
+    swipe of multiple items served under one token must still work."""
+    sessions = SessionStore()
+    model = _SpyModel()
+    await sessions.set_model("s1", model)
+    rec = _guest(sessions, "s1")
+    token = _guest_token_bound("s1", [7, 8])
+
+    await rec.record(item={"id": 7}, direction="right", token=token)
+    await rec.record(item={"id": 8}, direction="left", token=token)
+    assert model.rewards == [1.0, 0.3]
+
+
 # ── factory resolves identity once ──────────────────────────────────────────
 
 def test_make_recommender_resolves_guest_when_no_user():

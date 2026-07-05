@@ -93,6 +93,11 @@ class TestInitDB:
                     "image_source_url", "image_review_status"):
             assert col in cols, f"migration missing column: {col}"
 
+        tables = {r["name"] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'"
+        ).fetchall()}
+        assert "consumed_snapshot_items" in tables
+
         conn.close()
         db_path.unlink(missing_ok=True)
 

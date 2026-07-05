@@ -261,6 +261,27 @@ async def test_swipe_right(auth_client):
     assert data["total_swipes"] == 1
 
 
+async def test_swipe_replay_rejected(auth_client):
+    """Replaying the same snapshot token for the same item is rejected — closes
+    the H1 residual (single-use nonce per (snapshot, item))."""
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+    token = await _recommend_and_token(client)
+    payload = {
+        "food_item_id": item_id,
+        "direction": "right",
+        "session_id": "s1",
+        "snapshot_token": token,
+    }
+
+    first = await client.post("/api/swipe", json=payload)
+    assert first.status_code == 200
+    assert first.json()["total_swipes"] == 1
+
+    replay = await client.post("/api/swipe", json=payload)
+    assert replay.status_code == 400
+
+
 async def test_swipe_invalid_direction(auth_client):
     client, _, _ = auth_client
     item_id = _insert_food_item(TEST_DB)

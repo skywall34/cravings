@@ -6,6 +6,7 @@ import base64
 import hmac
 import json
 import os
+import secrets
 import sqlite3
 import time
 from dataclasses import asdict, dataclass
@@ -31,6 +32,7 @@ class Snapshot:
     issued_at: float
     session_id: str = ""  # guest-only: bound to session instead of user_id
     item_ids: tuple[int, ...] = ()  # ids recommended under this token; swipe must target one
+    snapshot_id: str = ""  # unique per issuance; empty only for pre-migration tokens
 
     def to_context(self) -> dict:
         return {
@@ -58,6 +60,7 @@ def capture(
         recent_rejection_rate=db.recent_rejection_rate(conn, user_id),
         days_since_last_session=db.days_since_last_swipe(conn, user_id),
         issued_at=time.time(),
+        snapshot_id=secrets.token_hex(16),
     )
 
 
@@ -136,6 +139,7 @@ def capture_guest(
         recent_rejection_rate=0.0,
         days_since_last_session=0.0,
         issued_at=time.time(),
+        snapshot_id=secrets.token_hex(16),
     )
 
 

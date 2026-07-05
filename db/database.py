@@ -82,6 +82,7 @@ from db.swipe_events import (
     delete_swipes_for_user,
     delete_impressions_for_user,
     get_all_swipes_for_user,
+    consume_snapshot_item,
 )
 
 __all__ = [
@@ -111,6 +112,7 @@ __all__ = [
     "record_swipe", "recent_rejection_rate", "days_since_last_swipe",
     "get_swiped_cuisines", "get_swipe_stats", "get_insights",
     "delete_swipes_for_user", "delete_impressions_for_user", "get_all_swipes_for_user",
+    "consume_snapshot_item",
     # users (delete)
     "delete_user",
 ]

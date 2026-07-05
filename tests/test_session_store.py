@@ -106,3 +106,29 @@ async def test_empty_session_id_ignored(store):
     assert await store.get_model("") is None
     await store.mark("", 1)
     assert await store.seen("") == []
+
+
+# ── consume() — single-use nonce for swipe replay (H1 residual) ────────────
+
+@pytest.mark.asyncio
+async def test_consume_returns_true_once_then_false(store):
+    assert await store.consume("s1", "snap-a", 7) is True
+    assert await store.consume("s1", "snap-a", 7) is False
+
+
+@pytest.mark.asyncio
+async def test_consume_isolated_per_session(store):
+    assert await store.consume("s1", "snap-a", 7) is True
+    assert await store.consume("s2", "snap-a", 7) is True
+
+
+@pytest.mark.asyncio
+async def test_consume_isolated_per_item(store):
+    assert await store.consume("s1", "snap-a", 7) is True
+    assert await store.consume("s1", "snap-a", 8) is True
+
+
+@pytest.mark.asyncio
+async def test_consume_empty_session_id_ignored(store):
+    assert await store.consume("", "snap-a", 7) is True
+    assert await store.consume("", "snap-a", 7) is True

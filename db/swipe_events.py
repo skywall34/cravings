@@ -26,6 +26,35 @@ def record_swipe(
     conn.commit()
 
 
+_CONSUMED_SNAPSHOT_TTL_SECONDS = 35 * 60  # snapshot TTL (30min) + slack
+
+
+def consume_snapshot_item(
+    conn: sqlite3.Connection, snapshot_id: str, food_item_id: int, user_id: int
+) -> bool:
+    """Atomically mark (snapshot_id, food_item_id) as consumed. Returns True the
+    first time it's called for this pair, False on any repeat — i.e. a replay.
+    INSERT OR IGNORE + rowcount is one statement, so SQLite's single-writer
+    serialization prevents concurrent replays from both succeeding (same atomic
+    check-and-set style as db/users.py bump_verification_attempts)."""
+    _expire_consumed_snapshot_items(conn)
+    cur = conn.execute(
+        "INSERT OR IGNORE INTO consumed_snapshot_items (snapshot_id, food_item_id, user_id) "
+        "VALUES (?, ?, ?)",
+        [snapshot_id, food_item_id, user_id],
+    )
+    conn.commit()
+    return cur.rowcount > 0
+
+
+def _expire_consumed_snapshot_items(conn: sqlite3.Connection) -> None:
+    """Prune rows older than the snapshot TTL so the ledger doesn't grow forever."""
+    conn.execute(
+        "DELETE FROM consumed_snapshot_items WHERE consumed_at < datetime('now', ?)",
+        [f"-{_CONSUMED_SNAPSHOT_TTL_SECONDS} seconds"],
+    )
+
+
 def recent_rejection_rate(conn: sqlite3.Connection, user_id: int, n: int = 10) -> float:
     rows = conn.execute(
         "SELECT direction FROM swipe_events WHERE user_id = ? ORDER BY id DESC LIMIT ?",

@@ -134,7 +134,7 @@ The route resolves a `Recommender` via `make_recommender()`; for a registered us
 **3b. Swipe (`POST /api/swipe`)**
 
 1. Client returns `snapshot_token` + `food_item_id` + `direction`.
-2. Server verifies HMAC token — rejects if tampered or expired. This ensures the context used for training matches the context that was active when the user made their decision. The token also **binds the recommended item ids**: a swipe whose `food_item_id` was not in the served set is rejected, so the model can never be trained on an arbitrary (possibly safety-filtered) item the client names.
+2. Server verifies HMAC token — rejects if tampered or expired. This ensures the context used for training matches the context that was active when the user made their decision. The token also **binds the recommended item ids**: a swipe whose `food_item_id` was not in the served set is rejected, so the model can never be trained on an arbitrary (possibly safety-filtered) item the client names. Each token also carries a per-issuance `snapshot_id`; the server rejects a second swipe on the same `(snapshot_id, food_item_id)` pair (`db.consume_snapshot_item` for registered users, `SessionStore.consume` in-memory for guests), so a valid token can't be replayed within its TTL to train on one reward multiple times.
 3. Reward computed: right-swipe = 1.0, left-swipe = `CRAVINGS_LEFT_SWIPE_REWARD` (default 0.3). Non-zero left reward means the model adjusts rather than strongly penalizes — left-swipe = "not this time", not "never".
 4. Model update (Laplace approximation):
    ```
@@ -195,7 +195,7 @@ Effect: old swipes gradually contribute less. After ~14 days, their influence ha
 
 1. **Filtering before model** — safety/dietary flags remove incompatible items before any ML scoring. Model never sees unsafe items.
 2. **Content-based, not collaborative** — model learns over food attributes (spice, texture, cuisine), not food IDs. A new dish is immediately scoreable from its attributes without any swipe history on that dish.
-3. **Context round-trip is tamper-proof** — HMAC snapshot ensures training data reflects real context at swipe time, and binds the served item ids so a swipe can only train on an item that was actually recommended (and therefore already passed the filter).
+3. **Context round-trip is tamper-proof** — HMAC snapshot ensures training data reflects real context at swipe time, and binds the served item ids so a swipe can only train on an item that was actually recommended (and therefore already passed the filter). A per-issuance nonce (`snapshot_id`) makes each `(token, item)` pair single-use, so a valid token can't be replayed to train on the same reward more than once within its TTL.
 4. **Decay enables preference drift** — user taste can evolve; model doesn't lock into early signals.
 5. **Per-user isolation** — μ/B stored per user in DB; no shared state, no cross-user leakage.
 
@@ -452,7 +452,8 @@ cravings/
 │   ├── food.py             # food items, restaurants, embeddings, impressions; _eligibility_clauses
 │   │                       #   (shared safety-filter WHERE fragment), eligible-items TTL cache
 │   ├── swipe_events.py     # swipe recording, stats, swiped-cuisine history, insights aggregation;
-│   │                       #   delete_swipes_for_user, delete_impressions_for_user, get_all_swipes_for_user (GDPR)
+│   │                       #   delete_swipes_for_user, delete_impressions_for_user, get_all_swipes_for_user (GDPR);
+│   │                       #   consume_snapshot_item (single-use nonce, TTL-pruned, closes H1 replay)
 │   ├── metrics.py          # Cross-user aggregate queries backing the admin dashboard
 │   ├── seed_sync.py        # UPSERT content rows (food_items/restaurants) from the baked seed DB into the live DB
 │   └── database.py         # re-export hub — all callers unchanged; prefer direct sub-module imports
@@ -470,7 +471,7 @@ cravings/
 │   ├── model_service.py        # UserModelStore — thread-safe (RLock) per-user μ/B BLOB cache
 │   └── recommendation_service.py  # ModelServer — apply_decay (explicit decay+persist), recommend (pure read), record_swipe, get_status (pure alpha read), set_onboarding
 ├── swipe/
-│   ├── snapshot.py             # Snapshot dataclass (incl. served item_ids + check_item), capture(), seal(); _decode_authentic() + verify()/verify_guest() (HMAC-SHA256, 30-min TTL)
+│   ├── snapshot.py             # Snapshot dataclass (incl. served item_ids + check_item, single-use snapshot_id nonce), capture(), seal(); _decode_authentic() + verify()/verify_guest() (HMAC-SHA256, 30-min TTL)
 │   ├── session.py              # SessionStore: per-session locks, seen-set, guest ThompsonSamplingModel storage, TTL eviction
 │   ├── recorder.py             # record_swipe(): full Right-Swipe / Left-Swipe contract; reward_for_direction() (shared reward policy)
 │   └── intake.py               # build_intake()/build_guest_intake(): snapshot + filtering (both take extra_excluded); shape_results() + add_image_urls()

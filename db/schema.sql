@@ -151,6 +151,20 @@ CREATE TABLE IF NOT EXISTS user_item_impressions (
     PRIMARY KEY (user_id, food_item_id)
 );
 
+-- Single-use nonce ledger closing H1's replay gap: one row per (snapshot_id,
+-- food_item_id) ever successfully swiped by a registered user. Rows are pruned
+-- once older than the snapshot TTL (see db/swipe_events.py consume_snapshot_item).
+CREATE TABLE IF NOT EXISTS consumed_snapshot_items (
+    snapshot_id TEXT NOT NULL,
+    food_item_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id),
+    consumed_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (snapshot_id, food_item_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_consumed_snapshot_items_consumed_at
+    ON consumed_snapshot_items(consumed_at);
+
 CREATE INDEX IF NOT EXISTS idx_food_items_restaurant ON food_items(restaurant_id);
 CREATE INDEX IF NOT EXISTS idx_food_items_tagging_status ON food_items(tagging_status);
 CREATE INDEX IF NOT EXISTS idx_food_items_safety ON food_items(safety_risk_bitmask);
