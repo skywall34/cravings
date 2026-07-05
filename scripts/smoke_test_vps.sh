@@ -66,6 +66,18 @@ else
   fail "Skipped swipe — no item_id or snapshot_token"
 fi
 
+# ── 4b. Replay same token+item — must be rejected (H1 single-use nonce) ──────
+section "Swipe replay rejected (single-use snapshot nonce)"
+if [ -n "$ITEM_ID" ] && [ -n "$SNAP" ]; then
+  REPLAY_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/swipe" \
+    -H "Content-Type: application/json" \
+    -H "$AUTH" \
+    -d "{\"food_item_id\":$ITEM_ID,\"direction\":\"right\",\"session_id\":\"$SESSION\",\"snapshot_token\":\"$SNAP\"}")
+  [ "$REPLAY_STATUS" = "400" ] && ok "POST /api/swipe (replay same token+item) → 400" || fail "replay swipe → $REPLAY_STATUS (expected 400)"
+else
+  fail "Skipped replay check — no item_id or snapshot_token"
+fi
+
 # ── 5. Do 4 more swipes to reach 5 and trigger cuisine prior seed ─────────────
 section "Cuisine prior seed (swipe 5 trigger)"
 for i in 2 3 4 5; do
