@@ -1,5 +1,6 @@
 """FastAPI entry point — single-process replacement for the Go + gRPC split."""
 
+import json
 import logging
 import mimetypes
 import os
@@ -11,10 +12,9 @@ from pathlib import Path
 mimetypes.add_type("image/webp", ".webp")
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, Request, Response
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
@@ -83,26 +83,14 @@ app = FastAPI(lifespan=lifespan, root_path=_base_path)
 async def _flatten_validation_error(request: Request, exc: RequestValidationError):
     """Reshape FastAPI's structured 422 (a list) into {"detail": "<string>"}.
 
-    Shipped clients (incl. Android APKs) parse `detail` as a string, so request
-    validation must keep that shape rather than emitting the default error list.
+    Clients parse `detail` as a string, so request validation must keep that
+    shape rather than emitting the default error list.
     """
     errors = exc.errors()
     msg = errors[0].get("msg", "invalid request") if errors else "invalid request"
     if msg.startswith("Value error, "):
         msg = msg[len("Value error, "):]
     return JSONResponse(status_code=422, content={"detail": msg})
-
-# The Capacitor Android WebView serves bundled assets from https://localhost
-# (androidScheme: https) and calls this API cross-origin. The production web app
-# is same-origin and unaffected. Auth is a Bearer token, not cookies, so
-# credentials stay disabled.
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://localhost", "capacitor://localhost", "http://localhost"],
-    allow_credentials=False,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type"],
-)
 
 @app.middleware("http")
 async def _image_cache_headers(request: Request, call_next):
@@ -153,6 +141,60 @@ async def _log_errors(request: Request, call_next):
         raise
 
 
+_ASSETLINKS_PATH = "/.well-known/assetlinks.json"
+
+
+class _AssetLinksMiddleware:
+    """Pure ASGI: serves Digital Asset Links before root_path routing.
+
+    Traefik forwards /.well-known/assetlinks.json WITHOUT the /cravings prefix,
+    so it can't be a normal route while root_path=/cravings (VPS_DEPLOY.md).
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and scope["path"] == _ASSETLINKS_PATH:
+            # Read env at request time: VPS restart picks up new fingerprints,
+            # and tests can monkeypatch os.environ per-case.
+            fingerprints = [
+                f.strip()
+                for f in os.environ.get("CRAVINGS_ASSETLINKS_FINGERPRINTS", "").split(",")
+                if f.strip()
+            ]
+            if not fingerprints:
+                body = json.dumps({"detail": "not configured"}).encode()
+                status = 404
+            else:
+                package_name = os.environ.get("CRAVINGS_ANDROID_PACKAGE", "com.themshin.cravings")
+                body = json.dumps([
+                    {
+                        "relation": ["delegate_permission/common.handle_all_urls"],
+                        "target": {
+                            "namespace": "android_app",
+                            "package_name": package_name,
+                            "sha256_cert_fingerprints": fingerprints,
+                        },
+                    }
+                ]).encode()
+                status = 200
+            await send({
+                "type": "http.response.start",
+                "status": status,
+                "headers": [
+                    (b"content-type", b"application/json"),
+                    (b"cache-control", b"public, max-age=300"),
+                ],
+            })
+            await send({"type": "http.response.body", "body": body})
+            return
+        await self.app(scope, receive, send)
+
+
+app.add_middleware(_AssetLinksMiddleware)
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -188,6 +230,30 @@ if _images_dir.is_dir():
     app.mount("/images", StaticFiles(directory=str(_images_dir)), name="images")
 
 _dist = Path("frontend/dist")
+
+
+def _spa_index_or_404() -> FileResponse:
+    index = _dist / "index.html"
+    if not index.is_file():
+        raise HTTPException(status_code=404, detail="not built")
+    return FileResponse(index, media_type="text/html")
+
+
+@app.get("/privacy")
+async def privacy_page():
+    return _spa_index_or_404()
+
+
+@app.get("/terms")
+async def terms_page():
+    return _spa_index_or_404()
+
+
+@app.get("/account-deletion")
+async def account_deletion_page():
+    return _spa_index_or_404()
+
+
 if _dist.is_dir():
     app.mount("/", StaticFiles(directory=str(_dist), html=True), name="static")
 

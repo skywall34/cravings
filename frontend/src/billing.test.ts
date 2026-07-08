@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { effectivePremium } from './api'
 import type { UserInfo } from './api'
 
-// Mock storage so tests don't need localStorage/Capacitor
+// Mock storage so tests don't need localStorage
 vi.mock('./storage', () => ({
   get: vi.fn().mockResolvedValue('test-bearer-token'),
   set: vi.fn().mockResolvedValue(undefined),

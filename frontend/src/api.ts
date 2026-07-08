@@ -19,15 +19,16 @@ async function authHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {}
 }
 
-// Web build: BASE_URL ('/cravings/'), same-origin. Native build: absolute prod URL
-// injected via VITE_API_BASE_URL so the WebView (https://localhost) reaches prod.
+// Web build: BASE_URL ('/cravings/'), same-origin. VITE_API_BASE_URL is an
+// unused-by-default escape hatch for any future cross-origin build.
 function apiBase(): string {
   return (import.meta.env.VITE_API_BASE_URL ?? import.meta.env.BASE_URL).replace(/\/$/, '')
 }
 
-// Food/asset URLs from the API are root-relative ('/cravings/images/...'). On native
-// they must be prefixed with the prod origin or they resolve against https://localhost
-// and 404. On web (no VITE_API_BASE_URL) they stay relative and same-origin.
+// Food/asset URLs from the API are root-relative ('/cravings/images/...'). If a
+// future cross-origin build sets VITE_API_BASE_URL, prefix with that origin so
+// they don't resolve against the wrong host. On web (no VITE_API_BASE_URL) they
+// stay relative and same-origin.
 export function assetUrl(path: string | null | undefined): string | undefined {
   if (!path) return undefined
   const base = import.meta.env.VITE_API_BASE_URL
@@ -70,7 +71,7 @@ let recovering = false
 let onSessionExpired: (() => void) | null = null
 
 // App registers a reset callback (clear state + route to onboarding). Replaces
-// window.location.reload(), which is a no-op inside the Capacitor WebView.
+// window.location.reload(), which is a no-op inside installed-app contexts (PWA/TWA).
 export function setSessionExpiredHandler(fn: () => void): void {
   onSessionExpired = fn
 }

@@ -1,7 +1,0 @@
-<?xml version='1.0' encoding='utf-8'?>
-<resources>
-    <string name="app_name">Cravings</string>
-    <string name="title_activity_main">Cravings</string>
-    <string name="package_name">com.themshin.cravings</string>
-    <string name="custom_url_scheme">com.themshin.cravings</string>
-</resources>

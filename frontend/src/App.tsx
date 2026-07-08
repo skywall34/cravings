@@ -20,6 +20,7 @@ import { InsightsScreen } from './components/Insights'
 import { PaywallSheet } from './components/PaywallSheet'
 import { ConsentBanner } from './components/ConsentBanner'
 import { LegalPage } from './components/LegalPages'
+import { initialScreenFromPath } from './deepLink'
 import { LocationConsentModal } from './components/LocationConsentModal'
 import { InstallPrompt } from './InstallPrompt'
 import { useInstall } from './useInstall'
@@ -89,12 +90,12 @@ function SessionProgress({ count, total }: SessionProgressProps) {
   )
 }
 
-type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'verify' | 'profile' | 'insights' | 'privacy' | 'terms'
+type Screen = 'onboarding' | 'swipe' | 'restaurants' | 'summary' | 'login' | 'register' | 'verify' | 'profile' | 'insights' | 'privacy' | 'terms' | 'deletion'
 
 export default function App() {
   const swipeCardRef = useRef<SwipeCardHandle | null>(null)
 
-  const [screen, setScreen] = useState<Screen>('swipe')
+  const [screen, setScreen] = useState<Screen>(() => initialScreenFromPath(window.location.pathname))
   const [prevScreen, setPrevScreen] = useState<Screen>('swipe')
   const [food, setFood] = useState<FoodItem | null>(null)
   const [loading, setLoading] = useState(true)
@@ -131,7 +132,7 @@ export default function App() {
 
   useEffect(() => {
     // Route a server 401 (expired/invalid token) back to onboarding instead of
-    // window.location.reload(), which is a no-op inside the Capacitor WebView.
+    // window.location.reload(), which is a no-op inside installed-app contexts (PWA/TWA).
     // Clearing currentUser flips identity → the seam rebuilds a fresh session.
     setSessionExpiredHandler(() => {
       setCurrentUser(null)
@@ -494,7 +495,7 @@ export default function App() {
         </div>
       )}
 
-      {(screen === 'privacy' || screen === 'terms') && (
+      {(screen === 'privacy' || screen === 'terms' || screen === 'deletion') && (
         <LegalPage doc={screen} onBack={navigateBack} />
       )}
 

@@ -2,13 +2,13 @@ const LAST_UPDATED = 'May 31, 2026'
 const ACCENT = '#E85D04'
 
 interface LegalPageProps {
-  doc: 'privacy' | 'terms'
+  doc: 'privacy' | 'terms' | 'deletion'
   onBack: () => void
 }
 
 export function LegalPage({ doc, onBack }: LegalPageProps) {
-  const sections = doc === 'terms' ? TERMS_SECTIONS : PRIVACY_SECTIONS
-  const title = doc === 'terms' ? 'Terms of Service' : 'Privacy Policy'
+  const sections = SECTIONS[doc]
+  const title = TITLES[doc]
 
   return (
     <div style={{ width: '100%', maxWidth: 440, margin: '0 auto', padding: '8px 20px 80px' }}>
@@ -131,7 +131,7 @@ const PRIVACY_SECTIONS: Section[] = [
         'Erasure — delete your account and all associated swipe history.',
         'Correction — update inaccurate account details.',
       ],
-      'You can export or delete your data directly from your Profile, or by emailing us.',
+      'You can export or delete your data directly from your Profile, or by emailing us. See our Account Deletion page for step-by-step instructions.',
     ],
   },
   {
@@ -187,3 +187,48 @@ const TERMS_SECTIONS: Section[] = [
     ],
   },
 ]
+
+const DELETION_SECTIONS: Section[] = [
+  {
+    h: 'How to delete in-app',
+    body: [
+      'Any registered, logged-in user can delete their account from Profile → Delete Account.',
+    ],
+  },
+  {
+    h: 'What is removed',
+    body: [
+      'Deleting your account removes your account row (name, email, password hash), your entire swipe history, impressions, taste model, and preferences.',
+    ],
+  },
+  {
+    h: 'Alternative',
+    body: [
+      'You can also request deletion by emailing privacy@themshin.com from the address on your account.',
+    ],
+  },
+  {
+    h: 'Export first',
+    body: [
+      'If you want a copy of your data before deleting, use Profile → Export my data (JSON) first — deletion cannot be undone.',
+    ],
+  },
+  {
+    h: 'Guest sessions',
+    body: [
+      'Guest sessions (no account) store nothing server-side, so there is nothing to delete.',
+    ],
+  },
+]
+
+const TITLES: Record<LegalPageProps['doc'], string> = {
+  privacy: 'Privacy Policy',
+  terms: 'Terms of Service',
+  deletion: 'Account Deletion',
+}
+
+const SECTIONS: Record<LegalPageProps['doc'], Section[]> = {
+  privacy: PRIVACY_SECTIONS,
+  terms: TERMS_SECTIONS,
+  deletion: DELETION_SECTIONS,
+}

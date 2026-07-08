@@ -1,42 +1,26 @@
-// Storage seam: web proxies localStorage; native (Capacitor) uses Preferences.
-// Async everywhere so the native branch can await Preferences.get/set/remove.
-import { Capacitor } from '@capacitor/core'
-import { Preferences } from '@capacitor/preferences'
-
-const native = Capacitor.isNativePlatform()
-
-export async function get(key: string): Promise<string | null> {
-  if (native) {
-    const { value } = await Preferences.get({ key })
-    return value
-  }
+// Storage seam kept async so a future native/platform backend can slot in; web path is localStorage.
+export function get(key: string): Promise<string | null> {
   try {
-    return localStorage.getItem(key)
+    return Promise.resolve(localStorage.getItem(key))
   } catch {
-    return null
+    return Promise.resolve(null)
   }
 }
 
-export async function set(key: string, value: string): Promise<void> {
-  if (native) {
-    await Preferences.set({ key, value })
-    return
-  }
+export function set(key: string, value: string): Promise<void> {
   try {
     localStorage.setItem(key, value)
   } catch {
     /* ignore */
   }
+  return Promise.resolve()
 }
 
-export async function remove(key: string): Promise<void> {
-  if (native) {
-    await Preferences.remove({ key })
-    return
-  }
+export function remove(key: string): Promise<void> {
   try {
     localStorage.removeItem(key)
   } catch {
     /* ignore */
   }
+  return Promise.resolve()
 }

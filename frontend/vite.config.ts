@@ -19,9 +19,13 @@ export default defineConfig({
       registerType: 'autoUpdate',
       devOptions: { enabled: false },
       manifest: {
+        id: '/cravings/',
         name: 'Cravings',
         short_name: 'Cravings',
+        description: 'Swipe to find what to eat — personalized dish recommendations and nearby restaurants.',
         display: 'standalone',
+        orientation: 'portrait',
+        categories: ['food'],
         start_url: '/cravings/',
         scope: '/cravings/',
         theme_color: '#FFF8F0',

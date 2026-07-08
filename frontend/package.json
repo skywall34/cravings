@@ -9,20 +9,13 @@
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "preview": "vite preview",
-    "build:android": "vite build --mode capacitor --base / && cap sync android",
-    "open:android": "cap open android"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@capacitor/core": "^7.6.6",
-    "@capacitor/geolocation": "^7.1.8",
-    "@capacitor/preferences": "^7.0.4",
     "react": "^19.2.5",
     "react-dom": "^19.2.5"
   },
   "devDependencies": {
-    "@capacitor/android": "^7.6.6",
-    "@capacitor/cli": "^7.6.6",
     "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
