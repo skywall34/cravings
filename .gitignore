@@ -29,3 +29,18 @@ images/missing.csv
 # Re-include .gitkeep stubs so directory structure is preserved in repo
 !images/food/.gitkeep
 !images/cuisines/.gitkeep
+
+# TWA (Bubblewrap) — everything it generates except the manifest/runbook/store assets
+# (regenerable from twa-manifest.json via `bubblewrap update`)
+twa/*.keystore
+twa/app/
+twa/gradle*
+twa/build/
+twa/build.gradle
+twa/settings.gradle
+twa/.gradle/
+twa/*.aab
+twa/*.apk
+twa/*.idsig
+twa/store_icon.png
+twa/manifest-checksum.txt

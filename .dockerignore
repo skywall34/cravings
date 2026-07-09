@@ -20,3 +20,5 @@ tests
 # project_vps_image_state) — the ~89MB dir was busting the COPY layer on
 # every source edit for nothing. mkdir -p in the Dockerfile makes the mount point.
 images
+# TWA project (Bubblewrap keystore/build output) — irrelevant to the server image, COPY . . would otherwise pull it in
+twa
