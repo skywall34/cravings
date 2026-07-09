@@ -42,7 +42,7 @@ Multi-user support is live: each user has their own model state (μ, B matrices)
 | Component | Language/Framework | Key Libraries |
 |-----------|-------------------|---------------|
 | Web app | React + Vite 5 + TypeScript | Strict mode, typescript-eslint with type-aware rules |
-| Android app | Capacitor 7 (wraps the web bundle) | @capacitor/{core,android,cli,geolocation,preferences} |
+| Android app | TWA (Bubblewrap) wrapping the live PWA | `twa/` (Bubblewrap-generated project, gitignored except `twa-manifest.json`) |
 | API + ML | Python 3.12 / FastAPI | uvicorn, httpx, NumPy, SciPy |
 | LLM tagging | Python | Ollama (gemma4:e2b, local inference) |
 | Database | SQLite (local dev) → PostgreSQL (production) | Individual columns for attribute vectors (not JSON blobs) |
@@ -50,7 +50,7 @@ Multi-user support is live: each user has their own model state (μ, B matrices)
 
 > **Node version note**: Vite 5 used (not v9) — requires Node ≥ 18, compatible with Node 20.18.x on WSL2. Vite 9 requires Node 20.19+.
 >
-> **Android toolchain note**: Capacitor pinned to **v7** (CLI v8 requires Node ≥ 22; this env is Node 20). The Android Gradle build needs a **Java-21 toolchain** (Capacitor 7 plugins fail on JDK 17) and a **Linux** Android SDK (`~/Android/Sdk`, SDK 35) — the Windows SDK in `~/.bashrc` is not used. See `ANDROID_HANDOFF.md`.
+> **Android note (2026-07-08)**: Capacitor scaffold removed (`frontend/android/`, `capacitor.config.ts`, `.env.capacitor`, `@capacitor/*` deps) — PWA/TWA is the only mobile delivery path now. See `TWA_PLAY_STORE_PLAN.md` (repo root) for the TWA (Bubblewrap) build; the old `ANDROID_HANDOFF.md` Capacitor toolchain notes no longer apply.
 
 ## ML Model: Contextual Thompson Sampling
 
@@ -328,6 +328,8 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 
 ## Next Steps (for next session)
 
+**TWA Play Store path in progress (started 2026-07-04, code done 2026-07-08).** Capacitor scaffold removed; assetlinks middleware + `/privacy`/`/terms`/`/account-deletion` SPA routes added and deployed. See `TWA_PLAY_STORE_PLAN.md` (repo root) for the live status tracker — Phases 1-4 done, Phases 5-8 (Bubblewrap TWA build, Play Console upload, store listing, ADR-0019) remain.
+
 **P32 shipped and deployed (2026-06-20). Current state:**
 - PWA live at `https://themshin.com/cravings` — installable on Android + iOS.
 - Stripe sandbox deployed and verified: checkout → webhook → `is_premium=1` confirmed in DB.
@@ -351,7 +353,7 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 
 **Image quality fix (2026-06-20)**: fixed the 37 wrong images logged in `images/judge_failures.csv` (that CSV was a `--dry-run` rejudge artifact — verdicts never hit the DB, so items still shipped bad photos as `auto`). Curator LLM is now **Claude via a Claude Code agent** (the local `gemma4:e2b` judge was too weak). Flow: `scripts/mark_csv_rejected.py` → gemma `--refetch-rejected` pre-pass → one sequential Claude curator agent verifies all 37 + sources CC/PD replacements into `images/manual/` (`scripts/curator_worklist.py` feeds it) → `--manual` ingest. Result: 18 replaced (`approved`), 16 kept (`auto`), 3 unfindable (`rejected`→placeholder: Beso/Bánh Đập/Kinche). `ALLOWED_LICENSES` extended with `CC-BY-2.5`/`CC-BY-SA-2.5`. No re-embed (embeddings are text-only). See `docs/internal/PLAN_P12_FOOD_IMAGES.md`.
 
-**P19 Android (Capacitor) — superseded by P32 PWA (2026-06-20)**: Capacitor `android/` code retained as legacy but not maintained. See ADR-0016 and `docs/ANDROID_HANDOFF.md` (marked deprecated).
+**P19 Android (Capacitor) — superseded by P32 PWA (2026-06-20)**, scaffold removed 2026-07-08: Capacitor `android/` code, `capacitor.config.ts`, `.env.capacitor`, and `@capacitor/*` deps deleted (TWA/Bubblewrap wraps the live PWA instead — see `TWA_PLAY_STORE_PLAN.md`). See ADR-0016 and `docs/ANDROID_HANDOFF.md` (marked deprecated).
 
 **Image status (2026-05-23)**:
 - `auto`: 74 items with verified images
@@ -394,7 +396,7 @@ Architectural backlog (no current pain):
 
 ```
 cravings/
-├── frontend/               # React + Vite + TypeScript web app (+ Capacitor Android shell)
+├── frontend/               # React + Vite + TypeScript web app (PWA; wrapped for Android via twa/)
 │   ├── src/
 │   │   ├── App.tsx         # Root: auth init, session state, swipe loop
 │   │   ├── App.css         # All styles
@@ -403,10 +405,10 @@ cravings/
 │   │   │                   #   RateLimitError, effectivePremium(u) (single is_premium||is_admin check)
 │   │   ├── colorUtils.ts   # hexToRgba/shiftHex — shared by StatsCharts/AdminCharts/Archetype
 │   │   ├── cuisineEmoji.ts # Canonical CUISINE_EMOJI map — shared by 5 components + admin
-│   │   ├── storage.ts      # Storage seam: async get/set/remove — web→localStorage, native→@capacitor/preferences
+│   │   ├── storage.ts      # Storage seam: async get/set/remove — web→localStorage (async shape kept for a future native backend)
 │   │   ├── useInstall.ts   # PWA install-prompt hook (beforeinstallprompt capture + trigger)
 │   │   ├── InstallPrompt.tsx # PWA install UI (3-bucket: eligible/ineligible/installed)
-│   │   ├── vite-env.d.ts   # Vite client types + VITE_API_BASE_URL (set only in the Capacitor build)
+│   │   ├── vite-env.d.ts   # Vite client types + VITE_API_BASE_URL (unused-by-default escape hatch for a future cross-origin build)
 │   │   ├── admin.tsx       # Admin SPA entry point (separate Vite build target from the main app)
 │   │   ├── admin/
 │   │   │   ├── AdminApp.tsx    # Admin shell: token gate → Dashboard
@@ -432,19 +434,17 @@ cravings/
 │   │   │   ├── LocationConsentModal.tsx # Geolocation consent prompt (before first /api/nearby call)
 │   │   │   ├── AllergenNote.tsx    # Inline amber allergen disclaimer (best-effort, not certified)
 │   │   │   ├── ConsentBanner.tsx   # First-load cookie/session consent banner (storage-seam-persisted)
-│   │   │   └── LegalPages.tsx      # Full Privacy Policy + Terms of Service screens
+│   │   │   └── LegalPages.tsx      # Privacy Policy + Terms of Service + Account Deletion screens (`doc` union)
+│   │   ├── deepLink.ts         # initialScreenFromPath() — maps /privacy, /terms, /account-deletion URLs to a boot Screen
 │   │   ├── hooks/
-│   │   │   ├── useLocation.ts        # Geolocation: native→@capacitor/geolocation (coarse), web→navigator.geolocation
+│   │   │   ├── useLocation.ts        # Geolocation via navigator.geolocation (Chrome site-permission prompt in a TWA)
 │   │   │   ├── useLocationConsent.ts # Persists the user's geolocation consent decision
 │   │   │   └── useRecommender.ts     # Client-side recommend/swipe loop hook wrapping recommender/
 │   │   └── recommender/
 │   │       ├── recommender.ts   # Client-side session/session-summary types + swipe-history helpers
 │   │       └── transport.ts     # Thin HTTP transport layer over api.ts for the recommend/swipe loop
-│   ├── capacitor.config.ts # appId com.themshin.cravings, webDir dist, androidScheme https
-│   ├── .env.capacitor      # VITE_API_BASE_URL=https://themshin.com/cravings (Capacitor build only; web build untouched)
-│   ├── android/            # Generated Capacitor Android project (committed); coarse-location manifest, targetSdk 35
 │   ├── tsconfig.json       # strict mode, bundler resolution, react-jsx
-│   └── vite.config.ts      # base /cravings/ (web); Android build overrides via --base /. Proxy /api → localhost:8080
+│   └── vite.config.ts      # base /cravings/; manifest incl. id/description/orientation/categories for TWA (Bubblewrap reads this live). Proxy /api → localhost:8080
 ├── db/
 │   ├── schema.sql          # SQLite/PostgreSQL schema
 │   ├── connection.py       # get_connection, db_connection, init_db, _migrate
@@ -679,24 +679,11 @@ cd frontend && npm run build
 # Lint (typescript-eslint, type-aware rules)
 cd frontend && npm run lint
 
-# ── Android (Capacitor) ──────────────────────────────────────────────────────
-# Requires (see ANDROID_HANDOFF.md): Linux Android SDK 35 at ~/Android/Sdk,
-# JDK 21 at ~/jdks (Capacitor 7 plugins need a Java-21 toolchain), and
-# frontend/android/local.properties → sdk.dir. ~/.bashrc exports JAVA_HOME +
-# ANDROID_SDK_ROOT so the commands below need no inline env.
-
-# Build the Android web bundle (vite --mode capacitor --base /) and sync to native
-cd frontend && npm run build:android
-
-# Build the installable debug APK  → app/build/outputs/apk/debug/app-debug.apk
-cd frontend/android && ./gradlew assembleDebug --no-daemon
-
-# Sideload to a device (adb alias → Windows adb.exe talking to a USB device)
-adb devices
-adb install -r '\\wsl.localhost\Ubuntu\home\mshin\cravings\frontend\android\app\build\outputs\apk\debug\app-debug.apk'
-
-# Open the project in Android Studio
-cd frontend && npm run open:android
+# ── Android (TWA via Bubblewrap) ─────────────────────────────────────────────
+# Capacitor scaffold removed 2026-07-08 — Android ships as a Trusted Web Activity
+# wrapping the live PWA (no bundled web assets, no separate build to keep in sync).
+# See TWA_PLAY_STORE_PLAN.md (repo root, Phase 5) for the Bubblewrap init/build
+# commands and twa/README.md (once Phase 5 lands) for the recurring release runbook.
 
 # ── Full stack (2 terminals) ──────────────────────────────────────────────────
 # Terminal 1: uv run python main.py --db cravings.db

@@ -1,10 +1,12 @@
 # Android Migration — Capacitor Wrap
 
-> **DEPRECATED (2026-06-20) — Legacy reference only.**
+> **DEPRECATED (2026-06-20) — Legacy reference only. Scaffold removed 2026-07-08.**
 > PWA is now the primary mobile delivery channel for both iOS and Android (ADR-0016, P32).
-> The Capacitor `android/` code and `build:android` script remain in the repo but are no longer
-> maintained or shipped. This document is preserved for historical reference and in case the
-> Capacitor build ever needs to be revived. See `docs/internal/adr/0016-pwa-primary-mobile-delivery.md`.
+> The Capacitor `android/` code, `capacitor.config.ts`, `.env.capacitor`, and `build:android`/
+> `open:android` scripts were deleted from the repo on 2026-07-08 — Android now ships as a TWA
+> (Bubblewrap) wrapping the live PWA. This document is preserved for historical reference only;
+> none of its toolchain setup applies to the current path. See
+> `docs/internal/adr/0016-pwa-primary-mobile-delivery.md` and `TWA_PLAY_STORE_PLAN.md` (repo root).
 
 ---
 
