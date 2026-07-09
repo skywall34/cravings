@@ -50,7 +50,7 @@ Multi-user support is live: each user has their own model state (μ, B matrices)
 
 > **Node version note**: Vite 5 used (not v9) — requires Node ≥ 18, compatible with Node 20.18.x on WSL2. Vite 9 requires Node 20.19+.
 >
-> **Android note (2026-07-08)**: Capacitor scaffold removed (`frontend/android/`, `capacitor.config.ts`, `.env.capacitor`, `@capacitor/*` deps) — PWA/TWA is the only mobile delivery path now. See `TWA_PLAY_STORE_PLAN.md` (repo root) for the TWA (Bubblewrap) build; the old `ANDROID_HANDOFF.md` Capacitor toolchain notes no longer apply.
+> **Android note (2026-07-08)**: Capacitor scaffold removed (`frontend/android/`, `capacitor.config.ts`, `.env.capacitor`, `@capacitor/*` deps) — PWA/TWA is the only mobile delivery path now. TWA project built locally via Bubblewrap (`twa/`, `com.themshin.cravings`, JDK 17 required — not the old Capacitor JDK 21). See `TWA_PLAY_STORE_PLAN.md` (repo root, untracked) for the build runbook + toolchain gotchas; the old `ANDROID_HANDOFF.md` Capacitor toolchain notes no longer apply.
 
 ## ML Model: Contextual Thompson Sampling
 
@@ -328,7 +328,7 @@ swipe.shape_results(results, candidates, snapshot, base_path)
 
 ## Next Steps (for next session)
 
-**TWA Play Store path in progress (started 2026-07-04, code done 2026-07-08).** Capacitor scaffold removed; assetlinks middleware + `/privacy`/`/terms`/`/account-deletion` SPA routes added and deployed. See `TWA_PLAY_STORE_PLAN.md` (repo root) for the live status tracker — Phases 1-4 done, Phases 5-8 (Bubblewrap TWA build, Play Console upload, store listing, ADR-0019) remain.
+**TWA Play Store path in progress (started 2026-07-04).** Capacitor scaffold removed; assetlinks middleware + `/privacy`/`/terms`/`/account-deletion` SPA routes added and deployed (2026-07-08); TWA project built locally via Bubblewrap, signed AAB + APK produced and verified (2026-07-08). See `TWA_PLAY_STORE_PLAN.md` (repo root, untracked — deliberately not committed, will be deleted once this effort wraps) for the live status tracker. Remaining: Phase 0 (Play Console registration — **not started, blocks everything after**), Phase 6 (Console upload → fingerprints live), Phase 7 (store listing/assets), Phase 8 (ADR-0019 + docs rewrite).
 
 **P32 shipped and deployed (2026-06-20). Current state:**
 - PWA live at `https://themshin.com/cravings` — installable on Android + iOS.
@@ -445,6 +445,8 @@ cravings/
 │   │       └── transport.ts     # Thin HTTP transport layer over api.ts for the recommend/swipe loop
 │   ├── tsconfig.json       # strict mode, bundler resolution, react-jsx
 │   └── vite.config.ts      # base /cravings/; manifest incl. id/description/orientation/categories for TWA (Bubblewrap reads this live). Proxy /api → localhost:8080
+├── twa/                    # Bubblewrap TWA project (Play Store wrap of the live PWA, com.themshin.cravings)
+│   └── twa-manifest.json   # only tracked file — everything else (app/, build.gradle, gradlew, *.keystore, *.aab/*.apk) is gitignored + regenerated via `bubblewrap update`. See TWA_PLAY_STORE_PLAN.md (repo root, untracked) for the build runbook + gotchas.
 ├── db/
 │   ├── schema.sql          # SQLite/PostgreSQL schema
 │   ├── connection.py       # get_connection, db_connection, init_db, _migrate
