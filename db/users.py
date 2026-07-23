@@ -277,6 +277,10 @@ def push_recent_like(
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int) -> None:
+    # consumed_snapshot_items and billing_sessions both FK-reference users(id)
+    # with no cascade — must clear them or the DELETE below hits IntegrityError.
+    conn.execute("DELETE FROM consumed_snapshot_items WHERE user_id = ?", [user_id])
+    conn.execute("DELETE FROM billing_sessions WHERE user_id = ?", [user_id])
     conn.execute("DELETE FROM users WHERE id = ?", [user_id])
 
 

@@ -282,6 +282,25 @@ async def test_swipe_replay_rejected(auth_client):
     assert replay.status_code == 400
 
 
+async def test_delete_account_after_swipe(auth_client):
+    """A swipe writes a consumed_snapshot_items row (FK -> users.id, no cascade).
+    Deleting the account must not 500 on that FK — regression for a prod bug where
+    delete_user() only cleared users, not consumed_snapshot_items/billing_sessions."""
+    client, _, _ = auth_client
+    item_id = _insert_food_item(TEST_DB)
+    token = await _recommend_and_token(client)
+    swipe = await client.post("/api/swipe", json={
+        "food_item_id": item_id,
+        "direction": "right",
+        "session_id": "s1",
+        "snapshot_token": token,
+    })
+    assert swipe.status_code == 200
+
+    resp = await client.delete("/api/users/me")
+    assert resp.status_code == 204
+
+
 async def test_swipe_invalid_direction(auth_client):
     client, _, _ = auth_client
     item_id = _insert_food_item(TEST_DB)
